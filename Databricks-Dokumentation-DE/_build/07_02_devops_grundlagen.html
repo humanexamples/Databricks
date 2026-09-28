@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>DevOps-, DataOps- und CI/CD-Grundlagen</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>DevOps-, DataOps- und CI/CD-Grundlagen</h1>
+<p class="subtitle">Section 5 &middot; Implementing CI-CD &middot; Quelle: Kurs 4, M02 Kapitel 5&ndash;7</p>
+
+<p>Bevor man Continuous-Integration- und Continuous-Deployment-Praktiken (CI/CD) konkret in Databricks umsetzt, lohnt sich ein Blick auf die dahinterliegenden Konzepte: DevOps, sein datenspezifisches Pendant DataOps, und die Rolle von CI vs. CD innerhalb dieses Lebenszyklus.</p>
+
+<h2>1. Was ist DevOps?</h2>
+<p>DevOps ist eine Kultur und eine Sammlung von Praktiken, die Software-Engineering-Best-Practices mit IT-Betrieb (Operations) verbindet, um Software schneller, zuverlässiger und in höherer Qualität auszuliefern. Der klassische DevOps-Lebenszyklus umfasst acht wiederkehrende Phasen: <em>Planen &rarr; Entwickeln (Code) &rarr; Bauen (Build) &rarr; Testen &rarr; Freigeben (Release) &rarr; Deployen &rarr; Betreiben &rarr; Überwachen (Monitor)</em> &ndash; und beginnt danach wieder von vorn.</p>
+
+<h2>2. DataOps = DevOps für die Data-Engineering-Welt</h2>
+<p>DataOps überträgt genau diese Prinzipien &ndash; Automatisierung, Zusammenarbeit, kontinuierliche Verbesserung &ndash; auf Datenpipelines: Es automatisiert das Management von Datenpipelines, überwacht deren Qualität und beschleunigt die Auslieferung neuer/geänderter Pipelines in die Produktion. Parallel dazu überträgt <strong>MLOps</strong> dieselben Prinzipien auf den Machine-Learning-Lebenszyklus (Modelltraining, -versionierung, -deployment). Alle drei Disziplinen teilen sich dieselbe Grundidee, unterscheiden sich aber in den konkreten Artefakten, die durch die Pipeline fließen: Code (DevOps), Daten (DataOps) bzw. Modelle (MLOps).</p>
+
+<h2>3. Die Rolle von CI und CD</h2>
+<p><strong>Continuous Integration (CI)</strong> bedeutet, dass Codeänderungen mehrerer Mitwirkender regelmäßig in ein zentrales Repository zusammengeführt (gemerged) und dabei automatisiert getestet werden &ndash; Tests, die fehlschlagen, verhindern, dass fehlerhafter Code in den Hauptzweig gelangt. Dabei orientiert man sich häufig an der sogenannten <em>Testpyramide</em>: an der Basis stehen viele schnelle <strong>Unit-Tests</strong> (einzelne Funktionen isoliert), darüber weniger, aber breitere <strong>Integrationstests</strong> (Zusammenspiel mehrerer Komponenten, z. B. einer ganzen Pipeline), an der Spitze wenige <strong>Systemtests</strong> (das Gesamtsystem end-to-end).</p>
+
+<p><strong>Continuous Delivery</strong> automatisiert das Ausrollen geprüfter Änderungen in eine Staging-/Vorproduktionsumgebung, überlässt den finalen Schritt nach Produktion aber einer manuellen Freigabe. <strong>Continuous Deployment</strong> geht einen Schritt weiter: Jede Änderung, die alle Tests besteht, wird automatisch bis in die Produktionsumgebung ausgerollt &ndash; ganz ohne manuellen Eingriff. Welche der beiden Varianten sinnvoll ist, hängt vom Risiko- und Reifegrad des jeweiligen Projekts ab.</p>
+
+<h2>4. Umgebungsisolation als Grundlage</h2>
+<p>Damit CI/CD funktioniert, müssen Entwicklungs-, Test- (Stage) und Produktionsumgebung sauber voneinander getrennt sein &ndash; in Databricks typischerweise über separate Unity-Catalog-Kataloge (<code>dev</code>/<code>stage</code>/<code>prod</code>) mit jeweils eigenen Berechtigungen, sodass Entwickler nie versehentlich Produktionsdaten verändern.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Für das Testen von Lakeflow Declarative Pipelines über mehrere Umgebungen hinweg empfiehlt Databricks, gezielt Entwicklungs- und Testdatensätze mit sowohl validen als auch bewusst fehlerhaften Datensätzen anzulegen, um die Pipeline-Logik (inkl. Expectations) gegen realistische Fehlerfälle zu prüfen; jeder Pipeline-Lauf schreibt zudem ein strukturiertes Event-Log (als Delta-Tabelle abfragbar), das sich für automatisierte Prüfungen über dev/stage/prod hinweg auswerten lässt.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/ldp/expectations">Manage data quality with pipeline expectations &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

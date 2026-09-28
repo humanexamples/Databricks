@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>CI/CD mit Asset Bundles (Tests + Pipelines kombiniert)</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>CI/CD mit Asset Bundles (Tests + Pipelines kombiniert)</h1>
+<p class="subtitle">Section 5 &middot; Implementing CI-CD &middot; Quelle: Kurs 8, Modul 06</p>
+
+<p>Kapitel 1&ndash;5 dieser Section haben gezeigt, wie sich PySpark-Code in wiederverwendbare Funktionen zerlegen lässt und wie Unit- sowie Integrationstests dafür sorgen, dass eine Data-Pipeline zuverlässig funktioniert. Declarative Automation Bundles sind das Werkzeug, das diese Bausteine zu einer durchgängigen <strong>CI/CD-Pipeline</strong> zusammenfügt: ein einziges Bundle, das Unit-Tests, eine Lakeflow-Declarative-Pipeline mit eingebauten Integrationstests und eine Visualisierung als einen zusammenhängenden Workflow definiert &ndash; und das identisch über drei Umgebungen (<code>development</code>, <code>stage</code>, <code>production</code>) hinweg promotet wird.</p>
+
+<h2>1. Projektstruktur eines produktionsreifen Bundles</h2>
+<p>Während die einfachen Beispiele aus den vorherigen Kapiteln nur einen Job enthielten, zeigt das <em>Full Project</em>-Beispiel aus Modul 06, wie ein realistisches Data-Engineering-Projekt aufgebaut ist:</p>
+<table>
+<tr><th>Ordner/Datei</th><th>Inhalt</th></tr>
+<tr><td><code>databricks.yml</code></td><td>Bundle-Name, <code>include</code>-Liste, drei Targets (development/stage/production)</td></tr>
+<tr><td><code>resources/variables.yml</code></td><td>Alle Bundle-Variablen zentral an einer Stelle (Benutzername, E-Mail, Cluster-Lookup, Katalognamen je Umgebung)</td></tr>
+<tr><td><code>resources/job/dabs_workflow.job.yml</code></td><td>Der Workflow: drei Tasks (Unit-Tests, Pipeline, Visualisierung)</td></tr>
+<tr><td><code>resources/pipeline/health_etl_pipeline.pipeline.yml</code></td><td>Konfiguration der Lakeflow Declarative Pipeline (ehem. Delta Live Tables)</td></tr>
+<tr><td><code>src/dlt_pipelines/</code></td><td>Die eigentlichen ETL-Notebooks der Pipeline (Bronze/Silver/Gold)</td></tr>
+<tr><td><code>src/helpers/project_functions.py</code></td><td>Wiederverwendbare, testbare Transformationsfunktionen</td></tr>
+<tr><td><code>tests/unit_tests/</code></td><td>pytest-Unit-Tests für die Helper-Funktionen</td></tr>
+<tr><td><code>tests/integration_test/</code></td><td>Integrationstests als DLT-Expectations innerhalb der Pipeline</td></tr>
+</table>
+
+<h2>2. databricks.yml: drei Targets, ein Bundle</h2>
+<p>Die Hauptdatei bindet alle Ressourcen-Dateien über <code>include</code> ein und definiert für jedes der drei Targets die abweichenden Werte &ndash; in <code>development</code> und <code>stage</code> laufen die Tasks noch auf einem festen Lab-Cluster, in <code>production</code> dagegen auf Serverless-Compute:</p>
+
+<pre class="code yaml">bundle:
+  name: health_etl_bundle
+
+include:
+  - &quot;./resources/variables.yml&quot;
+  - &quot;./resources/pipeline/health_etl_pipeline.pipeline.yml&quot;
+  - &quot;./resources/job/dabs_workflow.job.yml&quot;
+
+targets:
+
+  development:
+    mode: development
+    default: true
+    resources:
+      jobs:
+        health_etl_workflow:
+          name: health_etl_workflow_${bundle.target}
+          tasks:
+            - task_key: Unit_Tests
+              existing_cluster_id: ${var.cluster_id}
+            - task_key: Visualization
+              existing_cluster_id: ${var.cluster_id}
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
+  stage:
+    mode: development
+    resources:
+      jobs:
+        health_etl_workflow:
+          name: health_etl_workflow_${bundle.target}
+          tasks:
+            - task_key: Unit_Tests
+              existing_cluster_id: ${var.cluster_id}
+            - task_key: Visualization
+              existing_cluster_id: ${var.cluster_id}
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      target_catalog: ${var.catalog_stage}
+      raw_data_path: /Volumes/${var.catalog_stage}/default/health
+
+  production:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      target_catalog: ${var.catalog_prod}
+      raw_data_path: /Volumes/${var.catalog_prod}/default/health</pre>
+
+<p>Bemerkenswert: <code>stage</code> nutzt technisch denselben <code>mode: development</code> wie die Entwicklungsumgebung (kein produktiver Namens-Präfix nötig, da es noch keine echten Endnutzer gibt), bekommt aber bereits die größere <code>stage</code>-Datenmenge und einen eigenen Katalog zugewiesen &ndash; ein typisches Muster, um eine Vorproduktions-Stufe realistisch zu testen, bevor produktive Daten involviert sind.</p>
+
+<h2>3. Der Workflow: Unit-Tests, Pipeline und Visualisierung als ein Job</h2>
+<p>Der Job in <code>resources/job/dabs_workflow.job.yml</code> verkettet drei Tasks unterschiedlichen Typs zu einem Workflow: einen Notebook-Task, der pytest-Unit-Tests ausführt, einen Pipeline-Task, der die Lakeflow-Pipeline anstößt, und einen abschließenden Notebook-Task für die Visualisierung:</p>
+
+<pre class="code yaml">resources:
+  jobs:
+    health_etl_workflow:
+      name: health_etl_workflow_${bundle.target}
+      description: Final Workflow SDK
+      email_notifications:
+        on_failure:
+          - ${var.my_email}
+      tasks:
+        - task_key: Unit_Tests
+          notebook_task:
+            notebook_path: ../../run_unit_tests.ipynb
+            source: WORKSPACE
+          description: Execute unit tests for project.
+        - task_key: Visualization
+          depends_on:
+            - task_key: Health_ETL
+          notebook_task:
+            notebook_path: ../../src/Final Visualization.ipynb
+            base_parameters:
+              catalog_name: ${var.target_catalog}
+            source: WORKSPACE
+          description: Final visualization for project.
+        - task_key: Health_ETL
+          depends_on:
+            - task_key: Unit_Tests
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.health_etl_pipeline.id}
+            full_refresh: true
+          description: Spark Declarative Pipeline
+
+      parameters:
+        - name: target
+          default: ${bundle.target}
+        - name: catalog_name
+          default: ${var.target_catalog}</pre>
+
+<p>Zwei Dinge sind hier lehrreich. Erstens: Die Task-Reihenfolge im YAML (<code>Unit_Tests</code>, <code>Visualization</code>, <code>Health_ETL</code>) muss nicht der Ausführungsreihenfolge entsprechen &ndash; ausschlaggebend ist ausschließlich <code>depends_on</code>. Zweitens: <code>pipeline_task</code> referenziert die Pipeline nicht über einen festen Namen, sondern über <code>${resources.pipelines.health_etl_pipeline.id}</code> &ndash; eine Bundle-interne Referenz, die die CLI beim Deployment automatisch auf die tatsächliche, generierte Pipeline-ID auflöst. Die Pipeline selbst wird in einer eigenen Datei definiert und bindet die ETL-Notebooks sowie die Integrationstests als Bibliotheken ein:</p>
+
+<pre class="code yaml">resources:
+  pipelines:
+    health_etl_pipeline:
+      name: health_etl_pipeline_${bundle.target}
+      libraries:
+        - glob:
+            include: ../../src/dlt_pipelines/gold_tables_dlt.sql
+        - glob:
+            include: ../../src/dlt_pipelines/ingest-bronze-silver_dlt.py
+        - glob:
+            include: ../../tests/integration_test/integration_tests_dlt
+      schema: ${var.schema}
+      photon: true
+      catalog: ${var.target_catalog}
+      serverless: true
+      root_path: ../../src/dlt_pipelines
+      configuration:
+        target: ${bundle.target}
+        raw_data_path: ${var.raw_data_path}</pre>
+
+<h2>4. Unit-Tests: pytest gegen die Helper-Funktionen</h2>
+<p>Die eigentliche Transformationslogik steckt in <code>src/helpers/project_functions.py</code> als reine, von Spark-Sessions unabhängig testbare Funktionen (z.&nbsp;B. <code>high_cholest_map</code>, <code>group_ages_map</code>). Der Unit-Test dazu nutzt <code>pyspark.testing.utils</code> und eine pytest-Fixture für die Spark-Session:</p>
+
+<pre class="code python">import pytest
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import when, col
+from pyspark.testing.utils import assertDataFrameEqual, assertSchemaEqual
+from src.helpers import project_functions
+
+
+@pytest.fixture(scope=&quot;session&quot;)
+def spark():
+    spark = SparkSession.builder.getOrCreate()
+    yield spark
+
+
+def test_high_cholest_column_valid_map(spark):
+    data = [(0,), (1,), (2,), (3,), (4,), (None,)]
+    sample_df = spark.createDataFrame(data, [&quot;value&quot;])
+
+    actual_df = sample_df.withColumn(&quot;actual&quot;, project_functions.high_cholest_map(&quot;value&quot;))
+
+    expected_df = spark.createDataFrame(
+        [(0, &quot;Normal&quot;), (1, &quot;Above Average&quot;), (2, &quot;High&quot;),
+         (3, &quot;Unknown&quot;), (4, &quot;Unknown&quot;), (None, &quot;Unknown&quot;)],
+        schema=[&quot;value&quot;, &quot;actual&quot;]
+    )
+
+    assertDataFrameEqual(actual_df.select(col(&#x27;value&#x27;)), expected_df.select(col(&#x27;value&#x27;)))</pre>
+
+<h2>5. Integrationstests als Pipeline-Expectations</h2>
+<p>Statt einer separaten Testsuite werden die Integrationstests hier direkt als zusätzliche DLT-Tabellen mit <code>@dlt.expect_all_or_fail</code> in die Pipeline eingebaut: Sie zählen Zeilen in Bronze/Silver und vergleichen sie mit dem für die jeweilige Umgebung erwarteten Wert. In <code>stage</code> und <code>development</code> laufen so alle Prüfungen, in <code>production</code> bewusst nur die auf der Gold-Tabelle &ndash; da in Produktion die absolute Zeilenzahl täglich wächst und ein fester Sollwert dort keinen Sinn ergäbe:</p>
+
+<pre class="code python">import dlt
+
+target = spark.conf.get(&quot;target&quot;)
+
+target_integration_tests_validation = {
+    &#x27;development&#x27;: {&#x27;health_bronze&#x27;: {&#x27;total_rows&#x27;: 7500}, &#x27;health_silver&#x27;: {&#x27;total_rows&#x27;: 7500}},
+    &#x27;stage&#x27;:       {&#x27;health_bronze&#x27;: {&#x27;total_rows&#x27;: 35000}, &#x27;health_silver&#x27;: {&#x27;total_rows&#x27;: 35000}}
+}
+
+def test_count_table_total_rows(table_name, total_count, target):
+    @dlt.table(name=f&quot;TEST_{target}_{table_name}_total_rows_verification&quot;)
+    @dlt.expect_all_or_fail({&quot;valid count&quot;: f&quot;total_rows = {total_count}&quot;})
+    def count_table_total_rows():
+        return spark.sql(f&quot;SELECT COUNT(*) AS total_rows FROM LIVE.{table_name}&quot;)
+
+# Je nach Zielumgebung unterschiedliche Tests ausfuehren
+if target in (&#x27;development&#x27;, &#x27;stage&#x27;):
+    test_count_table_total_rows(&#x27;health_bronze&#x27;, total_expected_bronze, target)
+    test_count_table_total_rows(&#x27;health_silver&#x27;, total_expected_silver, target)
+    test_gold_table_columns()
+elif target == &#x27;production&#x27;:
+    test_gold_table_columns()   # In Produktion nur die Gold-Tabelle pruefen</pre>
+
+<h2>6. Promotion über drei Umgebungen</h2>
+<p>Der eigentliche CI/CD-Ablauf besteht darin, exakt dieselben Befehle nacheinander gegen alle drei Targets auszuführen &ndash; nichts an der Bundle-Definition ändert sich zwischen den Umgebungen, nur die Zielangabe <code>-t</code>:</p>
+
+<pre class="code bash"># 1. Entwicklung: Unit-Tests + ETL + Integrationstests auf 7.500 Beispielzeilen
+databricks bundle validate -t development
+databricks bundle deploy -t development
+databricks bundle run health_etl_workflow
+
+# 2. Staging: dieselbe Definition, jetzt gegen 35.000 Zeilen Stage-Daten
+databricks bundle validate -t stage
+databricks bundle deploy -t stage
+databricks bundle run health_etl_workflow -t stage
+
+# 3. Produktion: volle Datenmenge, Serverless-Compute statt Lab-Cluster
+databricks bundle validate -t production
+databricks bundle deploy -t production
+databricks bundle run health_etl_workflow -t production
+
+# Variablen lassen sich bei Bedarf auch direkt ueberschreiben, ohne die YAML zu aendern
+databricks bundle validate --var=&quot;target_catalog=labuser123_2_stage&quot; -t stage
+
+# Aufraeumen: alle drei Umgebungen entfernen
+databricks bundle destroy -t development --auto-approve
+databricks bundle destroy -t stage --auto-approve
+databricks bundle destroy -t production --auto-approve</pre>
+
+<figure class="img">
+<img src="assets/08/cicd-dev-job-run.png">
+<figcaption>Erfolgreicher Lauf des dreistufigen Workflows (Unit_Tests &rarr; Health_ETL &rarr; Visualization) im development-Target &ndash; alle Tasks grün, Job-Parameter zeigen den Dev-Katalog.</figcaption>
+</figure>
+
+<p>In einer echten CI/CD-Pipeline (z.&nbsp;B. GitHub Actions) werden diese Befehle nicht manuell aus einem Notebook heraus gestartet, sondern automatisiert bei jedem Push bzw. Merge ausgeführt: ein Validate-Lauf bei jedem Pull Request, ein Deploy-nach-Development bei jedem Merge in einen Feature-Branch, und ein Deploy-nach-Production erst nach manueller Freigabe. Für die Authentifizierung wird dabei statt eines persönlichen Zugangs in der Regel ein <strong>Service Principal</strong> verwendet (siehe <code>run_as</code>-Einstellung in der Bundle-Konfiguration).</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks empfiehlt für produktive CI/CD-Pipelines mit Asset Bundles die <strong>Workload Identity Federation</strong> zur Authentifizierung gegenüber dem Workspace, da sie ohne dauerhaft gespeicherte Secrets auskommt und damit sicherer ist als klassische Personal-Access-Tokens. In der Praxis hat sich bewährt, GitHub-Actions-Workflows nach Zweck zu trennen (z.&nbsp;B. eigene Workflow-Dateien für Validierung, Dev-Deployment und Prod-Deployment), damit nicht jede Codeänderung versehentlich einen Produktions-Deploy auslöst. Ziel bleibt, dieselbe Bundle-Definition unverändert von der Entwicklungs- bis zur Produktionsumgebung zu bewegen und Konfigurationsabweichungen (&bdquo;Drift&ldquo;) zwischen den Stufen zu minimieren.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/dev-tools/ci-cd/best-practices">Best practices and recommended CI/CD workflows on Databricks &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

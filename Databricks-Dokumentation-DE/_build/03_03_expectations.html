@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Datenqualität mit Expectations</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Datenqualität mit Expectations</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: Kurs 3, Kapitel 6&ndash;8</p>
+
+<p>Fehlerhafte oder unerwartete Daten schleichen sich in fast jede Pipeline ein &ndash; ein leeres Pflichtfeld, ein ungültiger Statuscode, ein Datum in der Zukunft. Lakeflow Declarative Pipelines bietet mit <strong>Expectations</strong> ein eingebautes Werkzeug, um solche Datenqualitätsregeln direkt im Pipeline-Code zu definieren und automatisch durchzusetzen &ndash; ganz ohne separates Validierungs-Framework.</p>
+
+<h2>1. Was sind Expectations?</h2>
+<p>Eine <strong>Expectation</strong> ist eine SQL-Bedingung, die für jede Zeile geprüft wird, während sie die Pipeline durchläuft. Wird die Bedingung erfüllt, läuft die Verarbeitung normal weiter. Wird sie verletzt, entscheidet die konfigurierte <strong>Verletzungsaktion</strong> darüber, was mit der betroffenen Zeile geschieht. Definiert werden Expectations über die <code>CONSTRAINT ... EXPECT (...)</code>-Syntax direkt in der Tabellendefinition.</p>
+
+<h2>2. Die drei Verletzungsaktionen</h2>
+<table>
+<tr><th>Aktion</th><th>Verhalten bei Verletzung</th><th>Typischer Einsatz</th></tr>
+<tr><td><strong>WARN</strong> (Standard)</td><td>Verstoß wird protokolliert, die Zeile bleibt aber im Ergebnis erhalten, Pipeline läuft normal weiter</td><td>Nicht-kritische Qualitätsüberwachung, ohne den Betrieb zu unterbrechen</td></tr>
+<tr><td><strong>DROP ROW</strong></td><td>Die betroffene Zeile wird verworfen, die Anzahl wird protokolliert, restliche Verarbeitung läuft weiter</td><td>Fehlerhafte Daten sollen ausgeschlossen werden, ohne den Lauf zu stoppen</td></tr>
+<tr><td><strong>FAIL UPDATE</strong></td><td>Der betroffene Flow wird sofort gestoppt; manuelles Eingreifen erforderlich, andere Flows bleiben unberührt</td><td>Kritische Datenprobleme, die zwingend behoben werden müssen, bevor es weitergeht</td></tr>
+</table>
+<p>Mehrere Constraints können gleichzeitig auf einer Tabelle definiert werden und werden unabhängig voneinander ausgewertet &ndash; so lässt sich eine feingranulare, mehrschichtige Qualitätskontrolle über alle relevanten Spalten hinweg aufbauen.</p>
+
+<h2>3. Syntaxbeispiel: alle drei Aktionen kombiniert</h2>
+<p>Das folgende Beispiel zeigt, wie sich alle drei Verletzungsaktionen gemeinsam auf einer Silver-Tabelle einsetzen lassen &ndash; jede Spalte erhält dabei die für sie passende Strenge:</p>
+
+<pre class="code sql">CREATE OR REFRESH STREAMING TABLE orders_silver (
+  CONSTRAINT valid_notifications EXPECT (notifications IN (&#x27;Y&#x27;, &#x27;N&#x27;)),
+  CONSTRAINT valid_date EXPECT (order_timestamp &gt; &#x27;2021-12-26&#x27;) ON VIOLATION DROP ROW,
+  CONSTRAINT valid_id EXPECT (customer_id IS NOT NULL) ON VIOLATION FAIL UPDATE
+)
+AS
+SELECT order_id,
+       timestamp(order_timestamp) AS order_timestamp,
+       customer_id,
+       notifications
+FROM STREAM orders_bronze;</pre>
+
+<p>In diesem Beispiel wird <code>valid_notifications</code> ohne explizite <code>ON VIOLATION</code>-Angabe definiert &ndash; das entspricht automatisch dem Standardverhalten <strong>WARN</strong>. Bei einem echten Testlauf mit Beispieldaten ergab sich folgendes Bild: Von 174 eingelesenen Zeilen wurden 26 wegen eines ungültigen Datums verworfen (<code>DROP ROW</code>) und 39 lösten eine Warnung wegen eines ungültigen Notifications-Werts aus (<code>WARN</code>, Zeile bleibt erhalten) &ndash; am Ende standen 148 Zeilen in der Zieltabelle.</p>
+
+<h2>4. Wie Expectations im Pipeline-Ablauf wirken</h2>
+<p>Der Ablauf pro Zeile lässt sich in zwei Schritten zusammenfassen: Eine Zeile tritt in die Pipeline ein und wird gegen alle definierten Expectations geprüft. Besteht sie alle Prüfungen, wird sie normal weiterverarbeitet. Schlägt eine Prüfung fehl, greift die für diesen Constraint konfigurierte Aktion &ndash; unabhängig davon, was mit anderen Zeilen oder anderen Flows in derselben Pipeline passiert.</p>
+
+<figure class="img">
+<img src="assets/03/actions_overview.png">
+<figcaption>Jede Zeile wird gegen alle definierten Expectations geprüft; die konfigurierte Aktion bestimmt das weitere Vorgehen bei einer Verletzung.</figcaption>
+</figure>
+
+<h2>5. Metriken auswerten</h2>
+<p>Nach einem Pipeline-Lauf lassen sich die Ergebnisse jeder Expectation im Editor direkt einsehen &ndash; etwa über die <strong>Table metrics</strong> eines Datensatzes: Anzahl der Ausgabezeilen, wie viele Expectations erfüllt bzw. verletzt wurden, sowie eine Aufschlüsselung nach Constraint mit Ausfallquote. Für eine langfristige Auswertung über mehrere Läufe hinweg (z.&nbsp;B. um Qualitätstrends zu erkennen) empfiehlt sich das Abfragen des <strong>Pipeline-Event-Logs</strong>, das strukturierte Datenqualitäts-Metriken pro Lauf enthält.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Die aktuelle Databricks-Dokumentation verwendet für die programmatische Python-API leicht andere Bezeichner als die hier gezeigte SQL-Syntax: <code>expect</code> entspricht der WARN-Aktion (Zeile bleibt erhalten, Metriken werden erfasst), während <code>expect_or_drop</code> der DROP-ROW-Aktion entspricht und verhindert, dass ungültige Zeilen weiterverarbeitet werden. Das Pipeline-Event-Log gilt als zentrales Beobachtbarkeits-Werkzeug: Jeder Lauf schreibt strukturierte Datensätze zu Ausführungsfortschritt, Datenqualitätsergebnissen, Daten-Lineage und Fehlerdetails &ndash; das <code>details</code>-Feld enthält dabei unter anderem eine JSON-Struktur mit Bestanden-/Fehlgeschlagen-Zählern pro Constraint, die sich für Trendanalysen und Alarmierung eignet.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/ldp/expectations">Manage data quality with pipeline expectations &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

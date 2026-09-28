@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Versionskontrolle mit Git & Databricks Git-Ordnern</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Versionskontrolle mit Git & Databricks Git-Ordnern</h1>
+<p class="subtitle">Section 5 &middot; Implementing CI-CD &middot; Quelle: Kurs 4, M02 Kapitel 14&ndash;15, M03 Kapitel 1</p>
+
+<p>Ohne zentrale Versionskontrolle entstehen schnell Entwicklungs-Silos: Mehrere Personen arbeiten an Kopien desselben Notebooks, Änderungen lassen sich nicht mehr nachvollziehen, und es ist unklar, welche Version tatsächlich in Produktion läuft. Git löst dieses Problem durch nachvollziehbare Versionierung, parallele Entwicklung über Branches und einen zentralen Ort (das Remote-Repository, z. B. auf GitHub), auf den sich alle Beteiligten beziehen.</p>
+
+<h2>1. Branching-Strategie: Gitflow</h2>
+<p>Eine verbreitete Strategie ist <strong>Gitflow</strong>: Ein stabiler <code>main</code>-Branch spiegelt immer den Produktionsstand wider. Neue Funktionen werden in eigenen <em>Feature-Branches</em> entwickelt, über Pull Requests geprüft und dann in einen Integrations-Branch (oft <code>develop</code>) gemerged; Release- und Hotfix-Branches ermöglichen es, eine Version für die Veröffentlichung vorzubereiten bzw. dringende Produktionsfehler zu beheben, ohne laufende Feature-Entwicklung zu stören.</p>
+
+<h2>2. Databricks Git-Ordner (Git Folders)</h2>
+<p>Databricks integriert Git direkt in den Workspace über sogenannte <strong>Git-Ordner</strong> (früher „Repos“): Ein Git-Ordner ist ein Workspace-Verzeichnis, das an ein Remote-Repository gekoppelt ist und Standard-Git-Operationen (Pull, Commit, Push, Branch wechseln) über die Databricks-Oberfläche erlaubt. Typische Arbeitsweise:</p>
+<ul>
+<li><strong>Admin-Workflow:</strong> Ein Workspace-Administrator legt zentrale Git-Ordner für Produktions-/Test-/Staging-Branches unter einem gemeinsamen Pfad an.</li>
+<li><strong>Nutzer-Workflow:</strong> Jede Person klont das Repository in einen eigenen Git-Ordner unter ihrem Benutzerverzeichnis, arbeitet dort auf einem eigenen Branch und pusht Änderungen ins Remote-Repository.</li>
+<li><strong>Merge-Workflow:</strong> Nach Review und Merge eines Pull Requests wird der aktualisierte Stand automatisiert (z. B. per CI/CD-Pipeline) in die zentralen Produktions-Git-Ordner übernommen.</li>
+</ul>
+
+<h2>3. Authentifizierung mit einem GitHub Personal Access Token (PAT)</h2>
+<p>Damit Databricks im Namen einer Person auf ein privates GitHub-Repository zugreifen darf, wird in den Nutzereinstellungen ein <strong>Personal Access Token</strong> (PAT) hinterlegt. Dieses Token wird beim Verknüpfen des Git-Ordners mit dem Repository hinterlegt und ersetzt die klassische Passwort-Authentifizierung.</p>
+
+<h2>4. Automatisierung über die Repos-API</h2>
+<p>Für CI/CD-Automatisierung stellt Databricks eine <strong>REST-API für Git-Ordner</strong> bereit: Damit lässt sich z. B. nach einem erfolgreichen Merge eines Pull Requests automatisiert der entsprechende Produktions-Git-Ordner im Workspace auf den neuesten Commit aktualisieren &ndash; ganz ohne manuellen Eingriff einer Person im Workspace.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks beschreibt für CI/CD mit Git-Ordnern konkret drei Abläufe: einen <em>Admin-Flow</em> (zentrale Produktions-/Test-/Staging-Ordner anlegen), einen <em>Nutzer-Flow</em> (persönlicher Git-Ordner unter <code>/Workspace/Users/&lt;email&gt;/</code> mit eigenem Branch) und einen <em>Merge-Flow</em> (nach Merge eines Pull Requests automatisiertes Update der Produktions-Git-Ordner über die Repos-API). Diese Struktur deckt sich mit dem im Kurs vermittelten Modell.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/repos/ci-cd">CI/CD with Databricks Git folders &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

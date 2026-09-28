@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Unity-Catalog-Sicherheitsmodell (ACLs, Lineage, Discoverability)</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Unity-Catalog-Sicherheitsmodell (ACLs, Lineage, Discoverability)</h1>
+<p class="subtitle">Section 7 &middot; Governance and Security &middot; Quelle: Kurs 6, DP 1.1</p>
+
+<p>Unity Catalog ist die zentrale Governance-Schicht der Databricks-Plattform: Statt Berechtigungen getrennt auf Dateisystem-, Metastore- und Data-Warehouse-Ebene zu pflegen, verwaltet Unity Catalog Zugriffsrechte, Herkunftsnachweise (Lineage) und Metadaten für alle Daten- und KI-Objekte an einer einzigen Stelle. Das erleichtert nicht nur den Alltag, sondern ist auch die Grundlage dafür, Compliance-Anforderungen wie DSGVO oder CCPA überhaupt nachweisbar umzusetzen &ndash; wer wann worauf zugegriffen hat, lässt sich lückenlos dokumentieren.</p>
+
+<h2>1. Die Objekthierarchie: Metastore &rarr; Catalog &rarr; Schema &rarr; Table/Volume</h2>
+<p>Unity Catalog organisiert alle Datenobjekte in einem konsistenten Drei-Ebenen-Namespace. Ganz oben steht der <strong>Metastore</strong> &ndash; pro Cloud-Region wird typischerweise genau einer angelegt und mehreren Workspaces zugewiesen. Darunter folgen <strong>Catalogs</strong>, die als primäre Einheit der Datenisolation dienen und oft Organisationseinheiten oder Umgebungen (z. B. <code>dev</code>/<code>prod</code>) abbilden. Jeder Catalog enthält <strong>Schemas</strong> (vergleichbar mit Datenbanken), und darin liegen schließlich die eigentlichen Objekte: <strong>Tables</strong>, <strong>Views</strong>, <strong>Volumes</strong> (für unstrukturierte Dateien), <strong>Models</strong> und <strong>Functions</strong>. Eine Tabelle wird dadurch immer über den vollen Pfad <code>catalog.schema.tabelle</code> referenziert.</p>
+
+<figure class="img">
+<img src="assets/05/uc-hierarchy.png">
+<figcaption>Die Objekthierarchie in Unity Catalog: Metastore, Catalog, Schema und die darunterliegenden Objekttypen.</figcaption>
+</figure>
+
+<p>Storage-Speicherorte lassen sich auf Metastore-, Catalog- oder sogar Schema-Ebene festlegen, sodass Unternehmen bestimmte Datenkategorien gezielt in eigenen Cloud-Speicherorten isolieren können &ndash; etwa um regulatorische Vorgaben zur Datenresidenz zu erfüllen. Volumes verdienen besondere Erwähnung: Sie verwalten rohe, nicht-tabellarische Dateien (Konfigurationen, Checkpoints, Bilder) und ersetzen damit den älteren, unkontrollierten Zugriff über DBFS.</p>
+
+<h2>2. Das ACL-Modell: wer darf was womit</h2>
+<p>Der Zugriff auf jedes Objekt wird über <strong>Access Control Lists (ACLs)</strong> gesteuert, die sich in drei Fragen zusammenfassen lassen: <strong>Wer</strong> (das Principal &ndash; ein User, ein Service Principal oder, empfohlen, eine Gruppe), <strong>was</strong> (das Securable Object, z. B. eine Tabelle oder ein Schema) und <strong>wie</strong> (das Privilege, z. B. <code>SELECT</code>, <code>MODIFY</code>, <code>USE CATALOG</code>). Rechte werden über <code>GRANT</code> vergeben und über <code>REVOKE</code> wieder entzogen.</p>
+
+<p>Unity Catalog unterstützt dabei zwei grundsätzliche Strategien. Bei der <strong>vererbten Vergabe</strong> setzt man Rechte auf einer hohen Ebene (z. B. dem Catalog), und alle darunterliegenden Schemas und Tabellen &ndash; auch künftig neu erstellte &ndash; erben diese Rechte automatisch. Das ist bequem, birgt aber das Risiko, versehentlich zu viel freizugeben. Die Alternative ist die <strong>explizite Vergabe</strong> auf einzelne Objekte: aufwendiger in der Pflege, dafür präzise und sicher.</p>
+
+<pre class="code sql">-- Vererbte Rechte: alle Konten-Nutzer dürfen im gesamten Catalog lesen
+GRANT USE CATALOG, USE SCHEMA, SELECT ON CATALOG kunden_catalog TO `account users`;
+
+-- Explizite Rechte: nur Zugriff auf ein einzelnes Schema und eine einzelne View
+GRANT USE SCHEMA ON SCHEMA kunden_catalog.pii_data TO `account users`;
+GRANT SELECT ON VIEW kunden_catalog.pii_data.customers_gold_view TO `account users`;
+
+-- Rechte wieder entziehen
+REVOKE USAGE ON SCHEMA pii_data FROM `account users`;
+REVOKE SELECT ON VIEW pii_data.customers_gold_view FROM `account users`;
+
+-- Vergebene Rechte prüfen
+SHOW GRANTS ON SCHEMA pii_data;
+SHOW GRANTS ON VIEW pii_data.customers_gold_view;</pre>
+
+<p>Ein wichtiges Detail für den Aufbau sicherer Datenprodukte: Wenn eine <strong>View</strong> auf einer zugrunde liegenden Tabelle basiert, benötigen Nutzer der View keinen direkten Zugriff auf die Basistabelle &ndash; entscheidend ist, dass der <strong>Eigentümer der View</strong> über die nötigen Rechte auf die Basistabelle verfügt. Damit lässt sich eine Gold-View gezielt freigeben, während die zugrunde liegende Silver-Tabelle mit den vollständigen Rohdaten geschützt bleibt.</p>
+
+<h2>3. Tagging: Metadaten für Klassifizierung und Compliance</h2>
+<p>Tags sind Schlüssel-Wert-Paare, die sich auf nahezu jedes Unity-Catalog-Objekt anwenden lassen &ndash; auf Catalogs, Schemas, Tabellen und sogar auf einzelne Spalten. Sie werden vor allem für Datenklassifizierung (z. B. Markierung von DSGVO-relevanten Spalten), Suche und Lifecycle-Management eingesetzt. Pro Objekt sind bis zu 20 Tags möglich.</p>
+
+<pre class="code sql">-- Tabellen-Tags setzen
+ALTER TABLE customers_silver
+SET TAGS (
+  &#x27;quality&#x27; = &#x27;silver&#x27;,
+  &#x27;domain&#x27;  = &#x27;customer&#x27;
+);
+
+-- Spalten-Tag zur Compliance-Kennzeichnung
+ALTER TABLE customers_silver
+  ALTER COLUMN customer_id SET TAGS (&quot;compliance&quot; = &quot;GDPR&quot;);</pre>
+
+<h2>4. Discoverability: Daten wiederfinden</h2>
+<p>Da alle Metadaten zentral vorliegen, kann die Databricks-Suche direkt nach Tags filtern &ndash; etwa über die Syntax <code>domain:customer</code> in der Suchleiste. Ergebnisse werden dabei automatisch anhand der Berechtigungen des suchenden Nutzers gefiltert: Wer keinen Zugriff auf ein Objekt hat, sieht es auch in der Suche nicht. Alternativ lassen sich Tags direkt per SQL über die <code>INFORMATION_SCHEMA</code> abfragen:</p>
+
+<pre class="code sql">SELECT *
+FROM INFORMATION_SCHEMA.TABLE_TAGS
+WHERE TABLE_NAME = &#x27;customers_silver&#x27;;
+
+-- Analog verfügbar für weitere Objekttypen:
+-- INFORMATION_SCHEMA.CATALOG_TAGS, SCHEMA_TAGS, COLUMN_TAGS, VOLUME_TAGS</pre>
+
+<h2>5. Data Lineage</h2>
+<p>Unity Catalog erfasst automatisch die Herkunft und den Fluss von Daten &ndash; ganz ohne zusätzliche Konfiguration. Im Lineage-Tab von Catalog Explorer lässt sich für jedes Objekt sowohl <strong>Upstream</strong> (woher stammen die Daten, welche Quellen wurden verwendet) als auch <strong>Downstream</strong> (welche Tabellen, Dashboards oder Jobs verwenden dieses Objekt) einsehen. Lineage wird nicht nur für Tabellen und Spalten getrackt, sondern auch für Notebooks, Lakeflow Jobs, Dashboards und Dateien. Das ist essenziell für Impact-Analysen: Bevor eine Spalte gelöscht oder umbenannt wird, lässt sich sofort erkennen, welche nachgelagerten Reports oder Pipelines davon betroffen wären.</p>
+
+<h2>6. System-Tables: Audit, Zugriff und Kosten in SQL abfragbar</h2>
+<p>Unity Catalog stellt umfangreiche <strong>System-Tables</strong> im Catalog <code>system</code> bereit, mit denen sich der Zustand des gesamten Lakehouse per SQL analysieren lässt &ndash; ideal, um Audit-Anfragen oder Compliance-Nachweise zu beantworten.</p>
+
+<table>
+<tr><th>System-Table</th><th>Typische Fragestellung</th></tr>
+<tr><td><code>system.information_schema.tables</code></td><td>Welche Tabellen existieren in einem Catalog? Wer hat sie zuletzt geändert?</td></tr>
+<tr><td><code>system.information_schema.table_privileges</code></td><td>Wer hat welche Rechte auf eine bestimmte Tabelle?</td></tr>
+<tr><td><code>system.billing.usage</code></td><td>Wie viele DBUs wurden von welchem Nutzer/Job verbraucht?</td></tr>
+<tr><td><code>system.access.audit</code></td><td>Wer hat wann auf welches Objekt zugegriffen oder es gelöscht?</td></tr>
+<tr><td><code>system.access.table_lineage</code></td><td>Welche Tabellen wurden aus welcher Quelltabelle erzeugt?</td></tr>
+</table>
+
+<pre class="code sql">-- Wer hat zuletzt Zugriff auf eine sensible Tabelle bekommen?
+SELECT grantee, table_name, privilege_type
+FROM system.information_schema.table_privileges
+WHERE table_name = &#x27;customers_silver&#x27;;
+
+-- Wer hat eine Tabelle gelöscht? (Audit Log)
+SELECT user_identity.email, event_time
+FROM system.access.audit
+WHERE request_params.full_name_arg = &#x27;kunden_catalog.pii_data.customers_silver&#x27;
+  AND service_name = &#x27;unityCatalog&#x27;
+  AND action_name  = &#x27;deleteTable&#x27;;</pre>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Die <code>system.access.audit</code>-Tabelle bildet den Audit Log als abfragbare Tabelle ab und beantwortet detailliert, wer wann auf welches Objekt zugegriffen hat (Logins, Datenzugriffe, Start/Stopp von Compute-Ressourcen). Damit Audit-Logs überhaupt in den System-Tables erscheinen, müssen sie zunächst auf Account-Ebene aktiviert und konfiguriert werden. Die Einträge werden im JSON-Format erfasst und standardmäßig <strong>90 Tage</strong> aufbewahrt &ndash; für eine dauerhafte Aufbewahrung (z. B. für mehrjährige Compliance-Nachweise) sollten Audit-Daten regelmäßig in eine eigene, langfristig aufbewahrte Tabelle exportiert werden.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/data-governance/unity-catalog/audit">Audit Unity Catalog events &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,7 @@
+EmployeeID,FirstName,Country,Department,Salary,HireDate,Operation,ProcessDate
+,test,test,test,9999,2025-01-01,new,2025-06-05
+1,Sophia,US,Sales,72000,2025-04-01,new,2025-06-05
+2,Nikos,Gr,IT,55000,2025-04-10,new,2025-06-05
+3,Liam,US,Sales,69000,2025-05-03,new,2025-06-05
+4,Elena,GR,IT,53000,2025-06-04,new,2025-06-05
+5,James,Us,IT,60000,2025-06-05,new,2025-06-05

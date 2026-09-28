@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Ingestion-Methoden im Überblick</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Ingestion-Methoden im Überblick</h1>
+<p class="subtitle">Section 2 &middot; Data Ingestion and Loading &middot; Quelle: Kurs 1, Kapitel 3&ndash;5, 17</p>
+
+<p>Bevor Daten in Databricks analysiert, transformiert oder in Pipelines verarbeitet werden können, müssen sie zunächst aus einer Quelle &ndash; etwa Cloud-Speicher, Datenbanken oder SaaS-Anwendungen &ndash; in eine Delta-Tabelle geladen werden. Dieser Vorgang wird als <strong>Ingestion</strong> (Datenaufnahme) bezeichnet und ist der erste Schritt der sogenannten <em>Medallion-Architektur</em> (Bronze &rarr; Silver &rarr; Gold). Databricks bietet dafür mehrere Methoden an, die sich vor allem darin unterscheiden, ob Daten <strong>einmalig/batchweise</strong> oder <strong>inkrementell/kontinuierlich</strong> geladen werden sollen.</p>
+
+<figure class="img">
+<img src="assets/01/cloud-storage.png">
+<figcaption>Rohdaten liegen typischerweise als Dateien (CSV, JSON, Parquet, &hellip;) in einem Cloud-Speicher oder einem Unity-Catalog-Volume.</figcaption>
+</figure>
+
+<h2>1. Einmalige Batch-Ingestion mit CTAS und read_files()</h2>
+<p>Die einfachste Methode ist die <code>CREATE TABLE AS</code>-Anweisung (kurz <strong>CTAS</strong>) in Kombination mit der Tabellenfunktion <code>read_files()</code>. Damit lässt sich eine Delta-Tabelle in einem einzigen Schritt anlegen und mit dem Ergebnis einer Abfrage befüllen. Die Funktion <code>read_files()</code> erkennt das Dateiformat automatisch, leitet das Schema aus Metadaten ab (bei Parquet sehr zuverlässig, da das Schema in der Datei eingebettet ist) und bietet zusätzliche Optionen wie <code>schemaHints</code> für Sonderfälle.</p>
+
+<pre class="code sql">-- Vorschau der Rohdaten direkt aus dem Volume abfragen
+SELECT *
+FROM read_files(
+  &#x27;/Volumes/dbacademy_ecommerce/v01/raw/users-historical&#x27;,
+  format =&gt; &#x27;parquet&#x27;
+)
+LIMIT 10;
+
+-- Delta-Tabelle mit CTAS erzeugen und befüllen
+CREATE TABLE historical_users_bronze_ctas_rf
+SELECT *
+FROM read_files(
+        &#x27;/Volumes/dbacademy_ecommerce/v01/raw/users-historical&#x27;,
+        format =&gt; &#x27;parquet&#x27;
+      );</pre>
+
+<p>Mit <code>DESCRIBE TABLE EXTENDED</code> lässt sich anschließend prüfen, dass es sich um eine <strong>Managed Table</strong> handelt: Databricks verwaltet dabei sowohl die Metadaten als auch die zugrunde liegenden Daten. Wird eine solche Tabelle gelöscht, werden auch die Daten entfernt &ndash; im Gegensatz zu <strong>External Tables</strong>, bei denen Databricks nur die Metadaten verwaltet und die Daten unabhängig von der Tabelle bestehen bleiben.</p>
+
+<h2>2. Inkrementelle Batch-Ingestion mit COPY INTO</h2>
+<p><code>COPY INTO</code> ist ein SQL-Befehl, der Daten aus einem Dateipfad in eine bestehende Delta-Tabelle lädt. Der wichtigste Unterschied zu CTAS: <code>COPY INTO</code> ist <strong>idempotent</strong> &ndash; bereits geladene Dateien werden bei einem erneuten Aufruf automatisch übersprungen. Damit eignet sich der Befehl gut für wiederkehrende, geplante Batch-Jobs, die neu hinzugekommene Dateien laden sollen, ohne den gesamten Datenbestand neu einzulesen.</p>
+
+<pre class="code sql">-- Tabelle mit COPY_OPTIONS für automatische Schema-Evolution befüllen
+CREATE TABLE historical_users_bronze_ci_no_schema;
+
+COPY INTO historical_users_bronze_ci_no_schema
+  FROM &#x27;/Volumes/dbacademy_ecommerce/v01/raw/users-historical&#x27;
+  FILEFORMAT = parquet
+  COPY_OPTIONS (&#x27;mergeSchema&#x27; = &#x27;true&#x27;);
+
+-- Erneuter Aufruf: bereits geladene Dateien werden übersprungen
+-- (num_affected_rows = 0, da keine neuen Dateien vorhanden sind)
+COPY INTO historical_users_bronze_ci_no_schema
+  FROM &#x27;/Volumes/dbacademy_ecommerce/v01/raw/users-historical&#x27;
+  FILEFORMAT = parquet
+  COPY_OPTIONS (&#x27;mergeSchema&#x27; = &#x27;true&#x27;);</pre>
+
+<p>Ohne die Option <code>mergeSchema&nbsp;=&nbsp;true</code> schlägt <code>COPY INTO</code> fehl, sobald die Quelldateien mehr Spalten enthalten als die Zieltabelle (Fehler <code>COPY_INTO_SCHEMA_MISMATCH_WITH_TARGET_TABLE</code>). Die Option erlaubt es, das Tabellenschema automatisch um neue Spalten zu erweitern.</p>
+
+<h2>3. Kontinuierliche Ingestion mit Streaming Tables und Auto Loader</h2>
+<p>Für Quellen, die fortlaufend neue Dateien erhalten (z. B. Log-Dateien, Exporte aus vorgelagerten Systemen), empfiehlt Databricks <strong>Streaming Tables</strong> in Kombination mit <strong>Auto&nbsp;Loader</strong>. Auto Loader überwacht ein Verzeichnis effizient auf neue Dateien und verarbeitet nur die seit dem letzten Lauf hinzugekommenen Daten &ndash; ohne das gesamte Verzeichnis erneut auflisten zu müssen. In SQL wird Auto Loader über <code>STREAM read_files(...)</code> innerhalb einer <code>CREATE OR REFRESH STREAMING TABLE</code>-Anweisung aktiviert.</p>
+
+<pre class="code sql">CREATE OR REFRESH STREAMING TABLE sql_csv_autoloader
+SCHEDULE EVERY 1 WEEK        -- automatische, periodische Aktualisierung (optional)
+AS
+SELECT *
+FROM STREAM read_files(
+  &#x27;/Volumes/dbacademy/&lt;schema&gt;/csv_files_autoloader_source&#x27;,
+  format =&gt; &#x27;CSV&#x27;,
+  sep =&gt; &#x27;|&#x27;,
+  header =&gt; true
+);
+
+-- Tabelle manuell aktualisieren (neue Dateien seit dem letzten Lauf laden)
+REFRESH STREAMING TABLE sql_csv_autoloader;
+
+-- Verlauf der Aktualisierungen einsehen
+DESCRIBE HISTORY sql_csv_autoloader;</pre>
+
+<p>Jeder <code>REFRESH</code>-Vorgang wird als eigene Version in der Tabellenhistorie protokolliert, sodass sich jederzeit nachvollziehen lässt, wann welche Datenmenge geladen wurde.</p>
+
+<h2>4. Welche Methode wählen?</h2>
+<table>
+<tr><th>Methode</th><th>Ladeart</th><th>Typischer Einsatzzweck</th></tr>
+<tr><td>CTAS + <code>read_files()</code></td><td>Einmalig (voller Snapshot)</td><td>Erstbefüllung, Prototyping, Ad-hoc-Analysen</td></tr>
+<tr><td><code>COPY INTO</code></td><td>Inkrementell, idempotent</td><td>Wiederkehrende Batch-Jobs auf mittelgroßen Dateimengen</td></tr>
+<tr><td>Streaming Table + Auto Loader</td><td>Inkrementell/kontinuierlich, skaliert auf sehr viele Dateien</td><td>Produktive Bronze-Schicht, wachsende/laufend eintreffende Datenmengen</td></tr>
+</table>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Für die meisten neuen Ingestion-Anwendungsfälle empfiehlt Databricks inzwischen grundsätzlich <strong>Streaming Tables</strong> als bevorzugten Ansatz, auch für Daten aus Cloud-Speicher oder Message-Bussen wie Kafka &ndash; <code>read_files()</code> ist dabei die SQL-Funktion, über die Auto Loader innerhalb einer Streaming-Table-Definition angesprochen wird. CTAS und <code>COPY INTO</code> bleiben unterstützt und sinnvoll für einmalige bzw. einfache wiederkehrende Batch-Ladevorgänge, gelten aber nicht mehr als Standardempfehlung für neue produktive Pipelines. Für komplexere Quellen (SaaS-Anwendungen, Datenbanken) bietet Databricks zusätzlich <strong>Lakeflow Connect</strong> mit vorgefertigten, verwalteten Connectoren an (siehe Kapitel 4 dieses Themenordners).<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/ldp/load">Load data in pipelines &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

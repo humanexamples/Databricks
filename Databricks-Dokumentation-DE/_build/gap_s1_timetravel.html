@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Time Travel und VACUUM bei Delta Lake</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Time Travel und VACUUM bei Delta Lake</h1>
+<p class="subtitle">Section 1 &middot; Databricks Intelligence Plattform &middot; Quelle: Udemy-Kursmaterial &bdquo;Advanced Delta Lake Features&ldquo;, erg&auml;nzt mit Databricks-Dokumentation</p>
+
+<p>Weil jede Änderung an einer Delta-Tabelle im Transaktionsprotokoll festgehalten wird (siehe vorheriges Kapitel), lässt sich der komplette Verlauf einer Tabelle nachvollziehen &ndash; und sogar rückgängig machen. Dieses Kapitel behandelt die drei praktischen Werkzeuge dafür: <strong>Time Travel</strong>, <strong>RESTORE TABLE</strong> und <strong>VACUUM</strong>.</p>
+
+<h2>1. Die Tabellenhistorie einsehen</h2>
+<p>Mit <code>DESCRIBE HISTORY</code> lässt sich der vollständige Audit-Trail einer Tabelle abfragen &ndash; jede Version mit Zeitstempel, ausführender Person, Operation und betroffenen Dateien:</p>
+<pre class="code sql">DESCRIBE HISTORY my_table;</pre>
+
+<h2>2. Time Travel: ältere Versionen abfragen</h2>
+<p>Auf Basis dieser Historie lässt sich jede frühere Version einer Tabelle gezielt abfragen &ndash; entweder über einen Zeitstempel oder über die fortlaufende Versionsnummer:</p>
+<pre class="code sql">-- Per Zeitstempel
+SELECT * FROM my_table TIMESTAMP AS OF &quot;2019-01-01&quot;;
+
+-- Per Versionsnummer (zwei gleichwertige Schreibweisen)
+SELECT * FROM my_table VERSION AS OF 36;
+SELECT * FROM my_table@v36;</pre>
+<p>Das ist besonders nützlich, um den Zustand einer Tabelle vor einer bestimmten Änderung zu vergleichen oder nachträglich zu prüfen, welche Werte zu einem früheren Zeitpunkt tatsächlich vorlagen.</p>
+
+<h2>3. Fehler rückgängig machen: RESTORE TABLE</h2>
+<p>Hat z. B. ein fehlerhafter Pipeline-Lauf versehentlich Datensätze gelöscht oder überschrieben, lässt sich die gesamte Tabelle mit einem einzigen Befehl auf einen früheren, bekannt guten Zustand zurücksetzen:</p>
+<pre class="code sql">RESTORE TABLE my_table TO TIMESTAMP AS OF &quot;2019-01-01&quot;;
+RESTORE TABLE my_table TO VERSION AS OF 36;</pre>
+<p><code>RESTORE</code> ist dabei selbst nur eine weitere Transaktion: Es werden keine Dateien rückwirkend verändert, sondern anhand des Protokolls ermittelt, welche Dateien zur Zielversion gehörten, und diese Information als neuer, aktueller Log-Eintrag festgeschrieben &ndash; entsprechend schnell ist der Vorgang auch bei großen Tabellen.</p>
+
+<h2>4. Dateien kompaktieren und indizieren (Kurzüberblick)</h2>
+<p>Delta Lake kann viele kleine Dateien mit dem <code>OPTIMIZE</code>-Befehl zu größeren, effizienter lesbaren Dateien zusammenfassen (Compaction) und optional zusätzlich per <code>ZORDER BY</code> nach einer Spalte co-lokalisieren, um Data-Skipping-Algorithmen zu beschleunigen:</p>
+<pre class="code sql">OPTIMIZE my_table;
+OPTIMIZE my_table ZORDER BY id;</pre>
+<p>Die Details zu Z-Ordering, Partitionierung und dem moderneren Liquid Clustering &ndash; inklusive der jeweiligen Vor- und Nachteile &ndash; behandelt <strong>Section 6, Kapitel 2&ndash;3</strong> dieser Dokumentation ausführlich.</p>
+
+<h2>5. Aufräumen: VACUUM</h2>
+<p>Da Delta Lake bei Updates und Löschungen alte Dateien nicht sofort physisch entfernt (siehe Copy-on-Write im vorigen Kapitel), sammeln sich mit der Zeit nicht mehr benötigte Dateien an &ndash; sowohl aus nicht mehr referenzierten alten Tabellenversionen als auch aus fehlgeschlagenen, unvollständigen Schreibvorgängen. Der <code>VACUUM</code>-Befehl entfernt genau diese verwaisten Dateien:</p>
+<pre class="code sql">-- Alle Dateien entfernen, die aelter als die Aufbewahrungsfrist sind (Standard: 7 Tage)
+VACUUM my_table;
+
+-- Explizite Aufbewahrungsfrist in Stunden angeben
+VACUUM my_table RETAIN 168 HOURS;</pre>
+<p>Die Standard-Aufbewahrungsfrist beträgt <strong>7 Tage</strong> &ndash; das ist bewusst so gewählt, damit noch laufende, länger dauernde Lesevorgänge nicht plötzlich auf gelöschte Dateien verweisen. Der entscheidende Merksatz für die Prüfung: <strong>Nach einem VACUUM ist Time Travel für Versionen älter als die Aufbewahrungsfrist nicht mehr möglich</strong> &ndash; die zugehörigen physischen Dateien existieren schlicht nicht mehr, unabhängig davon, was das Transaktionsprotokoll noch darüber weiß.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Die Aufbewahrungsfrist für <code>VACUUM</code> wird technisch über die Tabelleneigenschaft <code>delta.deletedFileRetentionDuration</code> gesteuert (Standardwert 7 Tage); Databricks rät ausdrücklich davon ab, diesen Wert zu unterschreiten. Getrennt davon regelt <code>delta.logRetentionDuration</code> (Standard 30 Tage), wie lange die JSON-Protokolldateien selbst aufbewahrt werden. Für <code>RESTORE TABLE</code> gilt: Die Wiederherstellung funktioniert nur, solange die zugehörigen Datendateien noch nicht durch ein <code>VACUUM</code> gelöscht wurden.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/delta/vacuum">Remove unused data files with vacuum &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

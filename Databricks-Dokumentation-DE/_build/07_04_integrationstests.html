@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Integrationstests mit Pipelines und Jobs</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Integrationstests mit Pipelines und Jobs</h1>
+<p class="subtitle">Section 5 &middot; Implementing CI-CD &middot; Quelle: Kurs 4, Module M02 CI, Kapitel 12&ndash;13</p>
+
+<p>Unit-Tests (Kapitel 07-3) prüfen einzelne Funktionen isoliert &ndash; sie sagen jedoch nichts darüber aus, ob eine komplette Pipeline aus Ingestion, Transformation und Speicherung im Zusammenspiel korrekt funktioniert. Genau hier setzen <strong>Integrationstests</strong> an: Sie validieren den Datenfluss über mehrere Komponenten hinweg und prüfen auf Probleme wie Dateninkonsistenzen, Format-Mismatches oder Verarbeitungsfehler, die erst beim Zusammenspiel der Komponenten sichtbar werden. Dieses Kapitel stellt zwei gängige Ansätze für Integrationstests auf Databricks vor: Expectations in Spark Declarative Pipelines und separate Notebook-Tasks in Lakeflow Jobs.</p>
+
+<h2>1. Zwei Wege zum Ziel</h2>
+<p>In Databricks lassen sich Integrationstests auf zwei unkomplizierte Arten umsetzen:</p>
+<ul>
+<li><strong>Methode 1 &ndash; Spark Declarative Pipelines (SDP) mit Expectations:</strong> Innerhalb der Pipeline werden zusätzliche Tabellen mit <strong>Expectations</strong> definiert, die das Ergebnis prüfen &ndash; etwa Zeilenzahlen oder erwartete Spaltenwerte. Dieselbe SDP-Transformationslogik läuft unverändert in allen Umgebungen (dev, stage, prod); da für Dev und Stage mit statischen Testdaten gearbeitet wird, sind die erwarteten Ergebnisse im Voraus bekannt.</li>
+<li><strong>Methode 2 &ndash; Lakeflow Jobs mit separaten Task-Notebooks:</strong> Alternativ werden mehrere Notebooks geschrieben, die jeweils einen bestimmten Aspekt der Pipeline prüfen, und als eigene Tasks in einen Lakeflow Job eingebunden.</li>
+</ul>
+<p>Bei Methode 2 sieht ein typischer Gesamt-Job so aus: Zunächst laufen die Unit-Tests, die einzelne Funktionen isoliert prüfen &ndash; schlägt einer davon fehl, bricht der Job sofort ab. Anschließend wird die SDP zur Dateningestion ausgeführt (ohne Expectations). Danach folgen die eigentlichen Integrationstests als separate Notebook-Tasks, parametrisiert für die jeweilige Zielumgebung (dev, stage oder production) &ndash; typische Prüfungen sind Zeilenzahlen, erfolgreiche Tabellenerstellung, erwartete Spalten oder Werte, Wertebereichsprüfungen und Duplikat-Erkennung. Erst wenn Unit-Tests, Datenpipeline und Integrationstests erfolgreich durchgelaufen sind, wird abschließend die finale Visualisierung erzeugt.</p>
+<p>Ein Nachteil von Methode 2: Sie erfordert deutlich mehr Code für Setup und Validierung sowie eine manuelle Verwaltung der Job-Parameter, um den Code dynamisch an die jeweilige Zielumgebung anzupassen.</p>
+
+<figure class="img">
+<img src="assets/07/sdp-integration-tests.png">
+<figcaption>Integrationstest-Muster mit SDP-Expectations: Dieselbe Pipeline-Logik läuft in dev, stage und prod; zusätzliche, per Expectation abgesicherte Test-Tabellen prüfen die Ergebnisse in dev und stage.</figcaption>
+</figure>
+
+<h2>2. Praxisbeispiel: Integrationstests mit SDP-Expectations</h2>
+<p>Das Kursprojekt nutzt Methode 1. Die eigentliche ETL-Logik liegt in einer Spark Declarative Pipeline (Datei <code>src/sdp/ingest-bronze-silver_sdp.py</code>), die je nach Konfigurationsvariable <code>target</code> Daten aus dem passenden Katalog (dev/stage/prod) einliest:</p>
+
+<pre class="code python">from pyspark import pipelines as dp
+import pyspark.sql.functions as F
+
+import sys
+sys.path.append(&#x27;../.&#x27;)
+from helpers import project_functions
+
+# Zielumgebung und Rohdatenpfad werden dynamisch aus der Pipeline-Konfiguration gelesen
+target = spark.conf.get(&quot;target&quot;)
+raw_data_path = spark.conf.get(&quot;raw_data_path&quot;)
+
+valid_rows = {{
+        &quot;not_null_pii&quot;: &quot;PII IS NOT NULL&quot;,
+        &quot;valid_date&quot;: &quot;date IS NOT NULL&quot;
+    }}
+
+@dp.table(
+    comment = &quot;This table will be used to ingest the raw CSV files and add metadata columns to the bronze table.&quot;,
+    table_properties = {{&quot;quality&quot;: &quot;bronze&quot;}}
+)
+@dp.expect_all_or_fail(valid_rows)
+def health_bronze():
+    return (
+        spark
+        .readStream
+        .format(&quot;cloudFiles&quot;)
+        .option(&quot;cloudFiles.format&quot;, &quot;csv&quot;)
+        .option(&quot;header&quot;, &quot;true&quot;)
+        .schema(project_functions.get_health_csv_schema())
+        .load(raw_data_path)
+        .select(
+            &quot;*&quot;,
+            &quot;_metadata.file_name&quot;,
+            &quot;_metadata.file_modification_time&quot;,
+            F.current_timestamp().alias(&quot;processing_time&quot;)
+            )
+    )</pre>
+
+<p>Die Datei <code>tests/integration_test/integration_tests_sdp.py</code> ergänzt dieselbe Pipeline um zusätzliche, ausschließlich zu Testzwecken erzeugte Tabellen. Der folgende Code ist unverändert aus dieser Datei übernommen und zeigt beide zentralen Bausteine: eine dynamische, umgebungsabhängige Erwartungs-Konfiguration sowie eine parametrisierte Testfunktion:</p>
+
+<pre class="code python">from pyspark import pipelines as dp
+
+target = spark.conf.get(&quot;target&quot;)
+
+## Erwartete Zeilenzahlen je Zielumgebung und Tabelle
+target_integration_tests_validation = {{
+    &#x27;development&#x27;: {{
+        &#x27;health_bronze&#x27;: {{&#x27;total_rows&#x27;: 7500}},
+        &#x27;health_silver&#x27;: {{&#x27;total_rows&#x27;: 7500}}
+    }},
+    &#x27;stage&#x27;: {{
+        &#x27;health_bronze&#x27;: {{&#x27;total_rows&#x27;: 35000}},
+        &#x27;health_silver&#x27;: {{&#x27;total_rows&#x27;: 35000}}
+    }}
+}}
+
+if target in (&#x27;development&#x27;, &#x27;stage&#x27;):
+    total_expected_bronze = target_integration_tests_validation[target][&#x27;health_bronze&#x27;][&#x27;total_rows&#x27;]
+    total_expected_silver = target_integration_tests_validation[target][&#x27;health_silver&#x27;][&#x27;total_rows&#x27;]
+
+
+def test_count_table_total_rows(table_name, total_count, target):
+    &#x27;&#x27;&#x27;
+    Count the number of rows in the specified table and compare with the expected
+    values for development and stage data. Fail the update if the count does not match.
+    &#x27;&#x27;&#x27;
+    @dp.table(
+        name=f&quot;TEST_{{target}}_{{table_name}}_total_rows_verification&quot;,
+        comment=f&quot;Confirms all rows were ingested from the {{target}} raw data to {{table_name}}&quot;
+    )
+    @dp.expect_all_or_fail({{&quot;valid count&quot;: f&quot;total_rows = {{total_count}}&quot;}})
+    def count_table_total_rows():
+        return spark.sql(f&quot;&quot;&quot;
+            SELECT COUNT(*) AS total_rows FROM {{table_name}}
+        &quot;&quot;&quot;)
+
+
+def test_gold_table_columns():
+    &#x27;&#x27;&#x27;
+    Checks unique values in the columns Age_Group and HighCholest_Group
+    in the gold table chol_age_agg.
+    &#x27;&#x27;&#x27;
+    check_silver_calc_columns = {{
+        &quot;valid age group&quot;: &quot;Age_Group in (\&#x27;0-9\&#x27;, \&#x27;10-19\&#x27;, \&#x27;20-29\&#x27;, \&#x27;30-39\&#x27;, \&#x27;40-49\&#x27;, \&#x27;50+\&#x27;, \&#x27;Unknown\&#x27;)&quot;,
+        &quot;valid cholest group&quot;: &quot;HighCholest_Group in (\&#x27;Normal\&#x27;, \&#x27;Above Average\&#x27;, \&#x27;High\&#x27;, \&#x27;Unknown\&#x27;)&quot;
+    }}
+
+    @dp.table(comment=&quot;Check age group and high cholest group in the gold table&quot;)
+    @dp.expect_all_or_fail(check_silver_calc_columns)
+    def test_calculated_columns_age_cholesterol():
+        return (dp
+                .read(&quot;chol_age_agg&quot;)
+                .select(&quot;Age_Group&quot;, &quot;HighCholest_Group&quot;)
+            )
+
+
+## Tests abhaengig von der Zielumgebung ausfuehren
+if target in (&#x27;development&#x27;, &#x27;stage&#x27;):
+    test_count_table_total_rows(&#x27;health_bronze&#x27;, total_expected_bronze, target)
+    test_count_table_total_rows(&#x27;health_silver&#x27;, total_expected_silver, target)
+    test_gold_table_columns()
+elif target == &#x27;production&#x27;:
+    ## In Produktion werden nur die Werte der Gold-Tabelle geprueft, nicht die Zeilenzahl
+    test_gold_table_columns()</pre>
+
+<p>Bemerkenswert an diesem Muster: Für <strong>development</strong> und <strong>stage</strong> wird die volle Prüfung inklusive konkreter Zeilenzahlen durchgeführt, da hier mit bekannten, statischen Testdatensätzen gearbeitet wird. In <strong>production</strong> hingegen sind die tatsächlichen Zeilenzahlen naturgemäß nicht im Voraus bekannt (die Daten wachsen kontinuierlich) &ndash; deshalb wird dort ausschließlich die Gold-Tabelle mit inhaltlichen Konsistenzprüfungen (z.&nbsp;B. gültige Kategoriewerte) validiert, nicht aber die absolute Zeilenzahl. Diese Fallunterscheidung nach <code>target</code> ist ein zentrales Muster für portable, wiederverwendbare Expectations, die in allen drei Umgebungen funktionieren.</p>
+
+<h2>3. Vier Schritte für Integrationstests mit Jobs (Methode 2)</h2>
+<ol>
+<li>Ein Setup-Notebook erstellen, das dynamisches Setup über Job-Parameter für Zielumgebung und Datenquelle übernimmt.</li>
+<li>Zusätzliche Notebooks oder Dateien für die eigentlichen Integrationstests schreiben, die als Tasks ausgeführt werden sollen.</li>
+<li>Diese neuen Notebooks/Dateien innerhalb eines <code>tests</code>-Ordners organisieren.</li>
+<li>Einen Workflow erstellen: benötigte Tabellen/Views über SDP oder Code erzeugen, Setup-Tasks für dynamische Job-Parameter hinzufügen, und die Validierung über Notebook-Tasks durchführen, deren Erfolg zur Bedingung für nachfolgende Tasks gemacht wird.</li>
+</ol>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Expectations in Lakeflow Declarative Pipelines sind optionale SQL-Boolean-Constraints auf Datasets, die festlegen, was bei einem verletzten Datensatz geschehen soll: warnen (<code>expect</code>), den Datensatz verwerfen (<code>expect_or_drop</code>) oder das gesamte Update fehlschlagen lassen (<code>expect_or_fail</code> bzw. <code>expect_all_or_fail</code> für mehrere Bedingungen gleichzeitig). Databricks empfiehlt ausdrücklich, für Pipeline-Tests eigene Entwicklungs- und Test-Datasets mit sowohl erwarteten als auch bewusst fehlerhaften/korrupten Datensätzen anzulegen &ndash; genau das Muster, das im Kursprojekt mit den separaten <code>development</code>/<code>stage</code>-Testtabellen umgesetzt wird.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/ldp/expectations">Manage data quality with pipeline expectations &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

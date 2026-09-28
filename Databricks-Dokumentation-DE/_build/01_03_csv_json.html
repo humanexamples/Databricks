@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Strukturierte & halbstrukturierte Daten laden (CSV, JSON)</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Strukturierte & halbstrukturierte Daten laden (CSV, JSON)</h1>
+<p class="subtitle">Section 2 &middot; Data Ingestion and Loading &middot; Quelle: Kurs 1, Kapitel 10&ndash;13</p>
+
+<p>CSV und JSON sind die beiden häufigsten Rohdatenformate beim Einstieg in die Bronze-Schicht. Beide werden über dieselbe Funktion &ndash; <code>read_files()</code> &ndash; eingelesen, unterscheiden sich aber deutlich in ihren Eigenheiten: CSV ist flach und trennzeichenbasiert, bringt aber kein eingebettetes Schema mit; JSON ist von Natur aus verschachtelt und erfordert eigene Techniken, um aus <em>semi-strukturierten</em> Daten <em>strukturierte</em> Spalten zu machen.</p>
+
+<h2>1. CSV-Dateien korrekt einlesen</h2>
+<p>CSV-Dateien (Comma-Separated Values) speichern Daten zeilenweise als Text, wobei Werte durch ein Trennzeichen &ndash; meist Komma, häufig aber auch Semikolon, Tabulator oder Pipe (<code>|</code>) &ndash; getrennt sind. Ruft man <code>read_files()</code> ohne weitere Optionen auf, geht die Funktion von den Standardeinstellungen aus (Komma als Trennzeichen, keine Kopfzeile) &ndash; bei abweichend formatierten Dateien liefert das dann falsch aufgeteilte oder falsch benannte Spalten. Deshalb müssen die tatsächlichen Formateigenschaften der Quelle explizit als Optionen übergeben werden:</p>
+
+<pre class="code sql">-- Ohne Optionen: Spalten werden nicht korrekt erkannt
+SELECT *
+FROM read_files(
+  &quot;/Volumes/dbacademy_ecommerce/v01/raw/sales-csv&quot;,
+  format =&gt; &quot;csv&quot;
+)
+LIMIT 5;
+
+-- Mit den passenden Optionen für diese Quelle
+SELECT *
+FROM read_files(
+  &quot;/Volumes/dbacademy_ecommerce/v01/raw/sales-csv&quot;,
+  format =&gt; &quot;csv&quot;,
+  sep    =&gt; &quot;|&quot;,     -- Spaltentrennzeichen (Standard: &quot;,&quot;)
+  header =&gt; true      -- erste Zeile enthält die Spaltennamen
+)
+LIMIT 5;</pre>
+
+<p>Wichtige weitere Optionen von <code>read_files()</code> für CSV sind u. a. <code>encoding</code> (Zeichensatz der Datei, z. B. <code>UTF-8</code> oder <code>ISO-8859-1</code>), <code>quote</code> und <code>escape</code> (Behandlung von in Werten enthaltenen Trennzeichen) sowie <code>schema</code>, um die automatische Schema-Ableitung zu umgehen. Letzteres lohnt sich fast immer im produktiven Einsatz: Ohne explizites Schema muss Databricks zunächst einen repräsentativen Teil aller Dateien lesen, um ein gemeinsames Schema zu bestimmen &ndash; das kostet Zeit und kann bei uneinheitlichen Quelldateien zu unerwarteten Typen führen. Ein festes Schema ist außerdem Voraussetzung dafür, dass Schema-Abweichungen zuverlässig in der <code>_rescued_data</code>-Spalte landen (siehe vorheriges Kapitel dieses Themenordners):</p>
+
+<pre class="code sql">SELECT *
+FROM read_files(
+  &#x27;/Volumes/dbacademy/ops/labuser/csv_demo_files/malformed_example_1_data.csv&#x27;,
+  format =&gt; &quot;csv&quot;,
+  sep    =&gt; &quot;|&quot;,
+  header =&gt; true,
+  schema =&gt; &#x27;&#x27;&#x27;
+      order_id INT,
+      email STRING,
+      transactions_timestamp BIGINT&#x27;&#x27;&#x27;,
+  rescuedDataColumn =&gt; &quot;_rescued_data&quot;
+);</pre>
+
+<h2>2. JSON: von der verschachtelten Struktur zur Spalte</h2>
+<p>JSON-Daten bestehen aus Objekten in geschweiften Klammern mit Schlüssel-Wert-Paaren; Werte können wiederum Zeichenketten, Zahlen, boolesche Werte, verschachtelte Objekte oder Arrays sein. Genau diese Verschachtelung macht JSON flexibel, aber auch komplexer zu verarbeiten als ein flaches CSV. Databricks bietet für JSON-formatierte Spalten drei grundsätzliche Ansätze:</p>
+<table>
+<tr><th>Ansatz</th><th>Eigenschaft</th></tr>
+<tr><td><strong>STRING</strong></td><td>JSON bleibt als reiner Text gespeichert; flexibel, aber langsam bei Abfragen, kein erzwungenes Schema.</td></tr>
+<tr><td><strong>STRUCT</strong></td><td>JSON wird anhand eines definierten Schemas in typisierte, verschachtelte Spalten geparst; erzwingt Konsistenz und ist deutlich performanter.</td></tr>
+<tr><td><strong>VARIANT</strong></td><td>Neuerer, offener Datentyp für semi-strukturierte Daten; kombiniert die Flexibilität von STRING mit einer Performance nahe an STRUCT, ohne starres Schema vorauszusetzen.</td></tr>
+</table>
+
+<h3>2.1 JSON-Werte direkt aus einer STRING-Spalte extrahieren</h3>
+<p>Mit der Doppelpunkt-Syntax <code>spalte:feld</code> lassen sich einzelne Felder direkt aus einer JSON-formatierten Textspalte auslesen &ndash; auch verschachtelt, mit Punkt- oder Klammer-Notation. Das ist der einfachste Einstieg, eignet sich aber vor allem für Ad-hoc-Abfragen, nicht für performancekritische, wiederkehrende Verarbeitung:</p>
+
+<pre class="code sql">SELECT
+  decoded_value,
+  decoded_value:device,
+  decoded_value:traffic_source,
+  decoded_value:geo,     -- enthält selbst wieder einen JSON-String
+  decoded_value:items    -- enthält ein verschachteltes Array von JSON-Objekten
+FROM kafka_events_bronze_decoded
+LIMIT 5;</pre>
+
+<h3>2.2 JSON in eine typisierte STRUCT-Spalte umwandeln</h3>
+<p>Für wiederkehrende, performancekritische Verarbeitung empfiehlt sich die Umwandlung in eine <code>STRUCT</code>-Spalte. Der Weg dahin führt über zwei Funktionen: <code>schema_of_json()</code> leitet aus einem Beispiel-String automatisch das passende Schema ab, <code>from_json()</code> wendet dieses Schema anschließend auf die gesamte Spalte an und erzeugt eine typisierte STRUCT-Spalte mit verschachtelten Feldern und Arrays:</p>
+
+<pre class="code sql">-- Schritt 1: Schema aus einem Beispielwert ableiten
+SELECT schema_of_json(
+  &#x27;{&quot;device&quot;:&quot;Linux&quot;,&quot;ecommerce&quot;:{&quot;purchase_revenue_in_usd&quot;:1075.5},&quot;geo&quot;:{&quot;city&quot;:&quot;Houston&quot;,&quot;state&quot;:&quot;TX&quot;}}&#x27;
+) AS schema;
+
+-- Schritt 2: Schema mit from_json() anwenden
+CREATE OR REPLACE TABLE kafka_events_bronze_struct AS
+SELECT
+  * EXCEPT (decoded_value),
+  from_json(
+    decoded_value,
+    &#x27;STRUCT&lt;device: STRING, ecommerce: STRUCT&lt;purchase_revenue_in_usd: DOUBLE, total_item_quantity: BIGINT&gt;,
+             geo: STRUCT&lt;city: STRING, state: STRING&gt;,
+             items: ARRAY&lt;STRUCT&lt;item_id: STRING, item_name: STRING, price_in_usd: DOUBLE, quantity: BIGINT&gt;&gt;,
+             traffic_source: STRING, user_id: STRING&gt;&#x27;
+  ) AS value
+FROM kafka_events_bronze_decoded;
+
+-- Zugriff auf Felder, verschachtelte Felder und Arrays per Punktnotation
+SELECT
+  value.device                    AS device,
+  value.geo.city                  AS city,
+  value.items,
+  array_size(value.items)         AS anzahl_items
+FROM kafka_events_bronze_struct;</pre>
+
+<p>Enthält eine Zeile ein Array mit mehreren Elementen (z. B. mehrere gekaufte Artikel pro Bestellung), lässt sich dieses Array mit <code>explode()</code> in einzelne Zeilen auflösen &ndash; eine Zeile pro Array-Element. Ist der Array-Wert <code>NULL</code>, erzeugt <code>explode()</code> dafür keine Zeile; soll trotzdem eine Zeile mit <code>NULL</code>-Werten erhalten bleiben, verwendet man stattdessen <code>explode_outer()</code>.</p>
+
+<pre class="code sql">SELECT
+  decoded_key,
+  array_size(value.items) AS anzahl_items,
+  explode(value.items)    AS einzelnes_item
+FROM kafka_events_bronze_struct;</pre>
+
+<h3>2.3 Sonderfall: Base64-kodierte Felder (z. B. Kafka-Events)</h3>
+<p>Bei Ereignisdaten aus Message-Bussen wie Kafka sind Schlüssel- und Wertfelder häufig Base64-kodiert, um Sonderzeichen und Formatierung beim Transport nicht zu beschädigen. Vor dem eigentlichen JSON-Parsing muss dieser Wert daher zunächst dekodiert werden &ndash; mit <code>unbase64()</code> in einen Binärwert und anschließend mit <code>CAST</code> in einen lesbaren String:</p>
+
+<pre class="code sql">CREATE OR REPLACE TABLE kafka_events_bronze_decoded AS
+SELECT
+  cast(unbase64(key)   AS STRING) AS decoded_key,
+  offset, partition, timestamp, topic,
+  cast(unbase64(value) AS STRING) AS decoded_value   -- jetzt ein lesbarer JSON-String
+FROM kafka_events_bronze_raw;</pre>
+
+<h3>2.4 Ausblick: der VARIANT-Datentyp</h3>
+<p>Als dritte, neuere Alternative bietet Databricks den offenen <strong>VARIANT</strong>-Datentyp an. Er speichert beliebig strukturierte semi-strukturierte Daten ohne starres Schema, bietet dabei aber ein deutlich besseres Abfrageverhalten als eine reine STRING-Spalte. Mit <code>parse_json()</code> wird eine JSON-Spalte in VARIANT umgewandelt, der Zugriff erfolgt anschließend wie gewohnt über die Doppelpunkt-Syntax:</p>
+
+<pre class="code sql">CREATE OR REPLACE TABLE kafka_events_bronze_variant AS
+SELECT
+  decoded_key, offset, partition, timestamp, topic,
+  parse_json(decoded_value) AS json_variant_value
+FROM kafka_events_bronze_decoded;
+
+SELECT
+  json_variant_value:device :: STRING,
+  json_variant_value:items
+FROM kafka_events_bronze_variant;</pre>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> <code>read_files()</code> ist die empfohlene, formatunabhängige Tabellenfunktion zum Einlesen von CSV, JSON, XML, TEXT, PARQUET, AVRO, ORC und Binärdateien; die konkreten Optionsnamen für jedes Format (z. B. <code>sep</code>, <code>header</code>, <code>encoding</code>, <code>quote</code>, <code>escape</code> bei CSV, <code>multiLine</code> bei JSON) entsprechen dabei den bekannten <code>DataFrameReader</code>-Optionen von Apache Spark. Der VARIANT-Datentyp, der in diesem Kurs noch als Public Preview beschrieben wird, ist inzwischen für die meisten Compute-Typen allgemein verfügbar (GA) und gilt bei neuen JSON-lastigen Ingestion-Pipelines zunehmend als bevorzugte Alternative zu manuell definierten STRUCT-Schemas, insbesondere wenn sich die Struktur der Quelldaten häufig ändert.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/sql/language-manual/functions/read_files">read_files table-valued function &ndash; Databricks-Dokumentation</a>, <a href="https://docs.databricks.com/aws/en/query/formats/json">Read and write JSON files &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

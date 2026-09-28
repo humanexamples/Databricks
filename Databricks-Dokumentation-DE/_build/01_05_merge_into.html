@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Daten in bestehende Delta-Tabellen einfügen</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Daten in bestehende Delta-Tabellen einfügen</h1>
+<p class="subtitle">Section 2 &middot; Data Ingestion and Loading &middot; Quelle: Kurs 1, Kapitel 16&ndash;17</p>
+
+<p>Neben den Methoden zur Erstbefüllung einer Tabelle (CTAS, COPY INTO, Streaming Tables) gibt es einen sehr häufigen Anwendungsfall: neue oder geänderte Datensätze in eine <strong>bereits bestehende</strong> Delta-Tabelle einzupflegen, ohne Duplikate zu erzeugen oder die gesamte Tabelle neu zu schreiben. Dafür bietet Databricks den <code>MERGE INTO</code>-Befehl.</p>
+
+<h2>1. MERGE INTO: Updates, Inserts und Deletes in einem Schritt</h2>
+<p><code>MERGE INTO</code> vergleicht eine Quelltabelle (bzw. das Ergebnis einer Abfrage) mit einer Zieltabelle anhand einer Join-Bedingung und führt je nach Ergebnis unterschiedliche Aktionen aus: Bestehende Zeilen werden aktualisiert (<code>UPDATE</code>), gelöscht (<code>DELETE</code>) oder neue Zeilen eingefügt (<code>INSERT</code>) &ndash; alles als eine einzige, atomare Transaktion. Das macht <code>MERGE INTO</code> zum Standardwerkzeug für inkrementelle Upsert-Logik, etwa beim Zusammenführen von CDC-Änderungen oder beim regelmäßigen Abgleich einer Bronze- mit einer Silver-Tabelle.</p>
+
+<pre class="code sql">MERGE INTO main_users_target target
+USING update_users_source source
+ON target.id = source.id
+WHEN MATCHED AND source.status = &#x27;update&#x27; THEN
+  UPDATE SET
+    target.email = source.email,
+    target.status = source.status
+WHEN MATCHED AND source.status = &#x27;delete&#x27; THEN
+  DELETE
+WHEN NOT MATCHED THEN
+  INSERT (id, first_name, email, sign_up_date, status)
+  VALUES (source.id, source.first_name, source.email, source.sign_up_date, source.status);</pre>
+
+<p>Die Bedingung hinter <code>WHEN MATCHED</code> bzw. <code>WHEN NOT MATCHED</code> kann zusätzliche Filter enthalten (hier: <code>source.status</code>), sodass sich Update-, Delete- und Insert-Fälle in einer einzigen Anweisung fein steuern lassen. Wie jede Delta-Operation wird auch <code>MERGE INTO</code> als neue Version in der Tabellenhistorie protokolliert und kann über <code>DESCRIBE HISTORY</code> sowie <code>SELECT * FROM tabelle VERSION AS OF n</code> (Time Travel) nachvollzogen werden.</p>
+
+<h2>2. Schema-Evolution innerhalb von MERGE INTO</h2>
+<p>Enthält die Quelltabelle neue Spalten, die in der Zieltabelle noch nicht existieren, schlägt ein normales <code>MERGE INTO</code> mit einem Schema-Fehler fehl. Für genau diesen Fall bietet Databricks die Erweiterung <code>MERGE WITH SCHEMA EVOLUTION INTO</code>: Sie erlaubt es, neue Spalten aus der Quelle automatisch in die Zieltabelle zu übernehmen, ohne vorher eine Session-Konfiguration setzen zu müssen.</p>
+
+<pre class="code sql">-- Ohne Schema-Evolution: schlägt fehl, wenn &quot;new_users_source&quot;
+-- eine zusätzliche Spalte &quot;country&quot; enthält, die im Ziel fehlt
+MERGE INTO main_users_target target
+USING new_users_source source
+ON target.id = source.id
+WHEN MATCHED AND source.status = &#x27;update&#x27; THEN
+  UPDATE SET
+    target.email = source.email,
+    target.status = source.status
+WHEN NOT MATCHED AND source.status = &#x27;new&#x27; THEN
+  INSERT (id, first_name, email, sign_up_date, status, country)
+  VALUES (source.id, source.first_name, source.email, source.sign_up_date, source.status, source.country);
+
+-- Mit Schema-Evolution: die neue Spalte &quot;country&quot; wird automatisch
+-- zur Zieltabelle hinzugefügt
+MERGE WITH SCHEMA EVOLUTION INTO main_users_target target
+USING new_users_source source
+ON target.id = source.id
+WHEN MATCHED AND source.status = &#x27;update&#x27; THEN
+  UPDATE SET
+    target.email = source.email,
+    target.status = source.status
+WHEN NOT MATCHED AND source.status = &#x27;new&#x27; THEN
+  INSERT (id, first_name, email, sign_up_date, status, country)
+  VALUES (source.id, source.first_name, source.email, source.sign_up_date, source.status, source.country);</pre>
+
+<h2>3. Weitere Ingestion-nahe Plattform-Features</h2>
+<p>Über die in diesem Themenordner behandelten Ingestion-Methoden hinaus bietet Databricks weitere Funktionen, die bei wachsender Architektur relevant werden können:</p>
+<ul>
+<li><strong>Lakehouse Federation</strong> &ndash; ermöglicht Abfragen auf externe Datenquellen (z. B. andere Datenbanken) direkt aus Databricks heraus, ohne die Daten vorher physisch zu kopieren.</li>
+<li><strong>Delta Sharing &amp; Databricks Marketplace</strong> &ndash; ein offener Standard bzw. ein Marktplatz, um Datensätze sicher mit anderen Organisationen zu teilen oder von dort zu beziehen, ebenfalls ohne unnötige Datenkopien.</li>
+<li><strong>Zerobus</strong> &ndash; eine Möglichkeit, Daten sehr niedrig-latent direkt in Databricks-Tabellen zu streamen (z. B. aus IoT- oder Event-Quellen).</li>
+</ul>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Für <code>MERGE WITH SCHEMA EVOLUTION INTO</code> empfiehlt Databricks inzwischen ausdrücklich, die Schema-Evolution direkt in der jeweiligen Schreiboperation anzugeben (wie oben gezeigt), statt sie global über eine Session-Konfiguration zu aktivieren &ndash; das macht das Verhalten pro Anweisung nachvollziehbar und vermeidet unbeabsichtigte Schema-Änderungen an anderer Stelle. Die Funktion steht ab Databricks Runtime 15.2 zur Verfügung; Nutzerinnen und Nutzer, die ausschließlich LTS-Versionen einsetzen, benötigen Runtime 15.4 LTS als erste LTS-Version mit dieser Funktion.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/tables/update-schema">Update table schemas with schema evolution &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

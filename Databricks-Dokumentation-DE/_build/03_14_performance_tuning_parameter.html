@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Performance-Tuning-Parameter für Transformationen</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Performance-Tuning-Parameter für Transformationen</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: PySpark-/Databricks-Referenzdokumentation</p>
+
+<p>Neben der korrekten Formulierung von Joins, Filtern und Aggregationen (Kapitel 11&ndash;13 dieser Section) verlangt der Exam Guide auch ein grundlegendes Verständnis der wichtigsten Spark-Tuning-Parameter: <code>spark.sql.shuffle.partitions</code>, <code>spark.default.parallelism</code>, die Speicherparameter <code>spark.executor.memory</code>/<code>spark.driver.memory</code> sowie <code>spark.sql.autoBroadcastJoinThreshold</code>. Dieses Kapitel erklärt jeden Parameter, nennt typische Werte und zeigt, wie sich eine Konfigurationsänderung anschließend &bdquo;vermessen&ldquo; lässt.</p>
+
+<h2>1. spark.sql.shuffle.partitions</h2>
+<p>Dieser Parameter legt fest, in wie viele Partitionen Daten bei einem Shuffle (also bei Wide Transformations wie <code>join()</code>, <code>groupBy()</code> oder <code>distinct()</code>) aufgeteilt werden. Der Standardwert beträgt <strong>200</strong> &ndash; ein Wert, der historisch für mittelgroße On-Premises-Cluster gewählt wurde und für viele moderne Workloads nicht mehr optimal ist. Zu viele Shuffle-Partitionen bei kleinen Datenmengen erzeugen unnötigen Overhead durch viele kleine Tasks; zu wenige Partitionen bei großen Datenmengen führen zu übergroßen Partitionen und damit potenziell zu Spill oder Out-of-Memory-Fehlern.</p>
+<pre class="code python"># aktuellen Wert auslesen
+print(spark.conf.get(&quot;spark.sql.shuffle.partitions&quot;))   # Standard: 200
+
+# Wert anpassen, z.B. für einen kleineren Cluster mit wenigen Cores
+spark.conf.set(&quot;spark.sql.shuffle.partitions&quot;, 32)</pre>
+<pre class="code sql">SET spark.sql.shuffle.partitions = 32;</pre>
+<p>Auf Databricks übernimmt <strong>Adaptive Query Execution (AQE)</strong> seit Spark&nbsp;3.0 einen Großteil dieser Feinabstimmung automatisch: <code>spark.sql.shuffle.partitions</code> wird dabei zur Laufzeit dynamisch angepasst (Coalescing kleiner Partitionen), sodass eine manuelle Anpassung in den meisten Fällen gar nicht mehr notwendig ist. Für Workloads ohne AQE bzw. zum grundlegenden Verständnis bleibt der Parameter dennoch relevant.</p>
+
+<h2>2. spark.default.parallelism</h2>
+<p>Während <code>spark.sql.shuffle.partitions</code> ausschließlich für DataFrame-/SQL-Shuffles gilt, steuert <code>spark.default.parallelism</code> die Standard-Parallelität von <strong>RDD</strong>-Operationen (etwa <code>parallelize()</code> oder RDD-Joins/-Aggregationen) sowie den Default für Operationen ohne explizite Partitionsangabe. Der Standardwert richtet sich nach der Cluster-Größe: bei lokalem Modus nach der Anzahl der Cores der Maschine, im Cluster-Modus nach der Gesamtzahl aller verfügbaren Executor-Cores.</p>
+<pre class="code python">print(spark.sparkContext.defaultParallelism)   # z.B. 8 auf einer 8-Core-Maschine
+spark.conf.set(&quot;spark.default.parallelism&quot;, 100)</pre>
+<p>In der täglichen Arbeit mit DataFrames (statt RDDs) spielt <code>spark.default.parallelism</code> eine untergeordnete Rolle gegenüber <code>spark.sql.shuffle.partitions</code> &ndash; für das Verständnis der Beziehung zwischen Cluster-Größe und Standard-Parallelität ist der Parameter dennoch Teil des Grundwissens.</p>
+
+<h2>3. Speicherparameter: spark.executor.memory und spark.driver.memory</h2>
+<p><code>spark.executor.memory</code> legt fest, wie viel Arbeitsspeicher jedem einzelnen Executor-Prozess für die Ausführung von Tasks zur Verfügung steht; <code>spark.driver.memory</code> entsprechend für den Treiberprozess, der u.&nbsp;a. den Ausführungsplan koordiniert und Ergebnisse von <code>collect()</code>-Aufrufen empfängt. Auf Databricks werden diese Werte in der Regel automatisch anhand des gewählten Cluster-/Instanztyps gesetzt, lassen sich bei Bedarf aber über die Cluster-Konfiguration (Spark-Config) oder programmatisch überschreiben.</p>
+<pre class="code python"># Hinweis: Speicherparameter müssen i.d.R. beim Start der Spark-Session/des Clusters
+# gesetzt werden, da Executoren bereits mit einer festen Speichergrenze starten.
+spark.conf.set(&quot;spark.executor.memory&quot;, &quot;8g&quot;)
+spark.conf.set(&quot;spark.driver.memory&quot;, &quot;4g&quot;)</pre>
+<p>Ein zu knapp bemessenes <code>spark.executor.memory</code> äußert sich typischerweise in vermehrtem Spill (Daten werden auf Festplatte ausgelagert) oder in Out-of-Memory-Fehlern einzelner Tasks; ein zu knapp bemessenes <code>spark.driver.memory</code> macht sich vor allem bei großen <code>collect()</code>-Aufrufen oder komplexen Ausführungsplänen mit vielen Partitionen bemerkbar.</p>
+
+<h2>4. spark.sql.autoBroadcastJoinThreshold</h2>
+<p>Dieser Parameter bestimmt, ab welcher geschätzten Tabellengröße Spark bei einem Join <em>automatisch</em> einen Broadcast Join wählt (siehe Kapitel 11 zu Join-Typen), statt einen teuren Shuffle beider Tabellen durchzuführen. Der Standardwert beträgt <strong>10&nbsp;MB (10485760 Bytes)</strong>. Wird der Wert auf <code>-1</code> gesetzt, deaktiviert dies den automatischen Broadcast vollständig.</p>
+<pre class="code python">print(spark.conf.get(&quot;spark.sql.autoBroadcastJoinThreshold&quot;))   # Standard: 10485760 (10 MB)
+
+# Schwellenwert erhöhen, z.B. auf 100 MB, wenn genügend Executor-Speicher vorhanden ist
+spark.conf.set(&quot;spark.sql.autoBroadcastJoinThreshold&quot;, 100 * 1024 * 1024)
+
+# automatischen Broadcast vollständig deaktivieren
+spark.conf.set(&quot;spark.sql.autoBroadcastJoinThreshold&quot;, -1)</pre>
+<pre class="code sql">SET spark.sql.autoBroadcastJoinThreshold = 104857600;  -- 100 MB</pre>
+<p>Ein höherer Schwellenwert kann bei Joins mit mittelgroßen Dimensionstabellen sinnvoll sein, erhöht aber auch das Risiko von Speicherproblemen auf den Executoren, falls die geschätzte Tabellengröße die tatsächliche unterschätzt (etwa nach komplexen vorgelagerten Transformationen).</p>
+
+<h2>5. Eine Änderung &bdquo;re-messen&ldquo;: Vorgehen in der Praxis</h2>
+<p>Der Exam Guide verlangt ausdrücklich, eine Parameteränderung anschließend hinsichtlich ihrer Wirkung zu überprüfen. In einem Databricks-Notebook bieten sich dafür zwei ergänzende Methoden an:</p>
+<ol>
+<li><strong>Zeitmessung mit <code>%timeit</code>:</strong> In einer Python-Notebookzelle lässt sich ein Transformationsschritt (inkl. einer abschließenden Aktion wie <code>count()</code>, da Spark sonst lazy bleibt) mehrfach automatisiert ausführen und die durchschnittliche Laufzeit ausgeben.</li>
+<li><strong>Vergleich in der Spark-UI:</strong> Über den Reiter &bdquo;SQL / DataFrame&ldquo; lässt sich für jede Ausführung die Gesamtlaufzeit sowie &ndash; über die Stage-Detailseiten &ndash; Kennzahlen wie Shuffle Read/Write-Volumen und Spill einsehen und zwischen &bdquo;vorher&ldquo; und &bdquo;nachher&ldquo; vergleichen.</li>
+</ol>
+<pre class="code python"># Beispiel: Auswirkung einer geänderten Shuffle-Partitionsanzahl messen
+spark.conf.set(&quot;spark.sql.shuffle.partitions&quot;, 200)
+%timeit grosse_tabelle.groupBy(&quot;kategorie&quot;).count().collect()
+
+spark.conf.set(&quot;spark.sql.shuffle.partitions&quot;, 16)
+%timeit grosse_tabelle.groupBy(&quot;kategorie&quot;).count().collect()
+
+# %timeit fuehrt die Zelle standardmaessig mehrfach aus und meldet Mittelwert
+# und Standardabweichung der Laufzeit -- so laesst sich der Effekt der
+# Konfigurationsaenderung direkt quantitativ vergleichen.</pre>
+<p>Wichtig für belastbare Messungen: Zwischen den beiden Messungen sollte möglichst nur der zu testende Parameter verändert werden, und Caching-Effekte (etwa bereits im Speicher gehaltene Zwischenergebnisse) sollten berücksichtigt bzw. durch mehrfache Wiederholung ausgeglichen werden. Bei kleinen Testdatenmengen &ndash; wie sie in Übungsumgebungen üblich sind &ndash; fallen Unterschiede durch Tuning-Parameter oft nur gering aus; die eigentliche Wirkung zeigt sich meist erst bei produktionsnahen Datenmengen.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Spark-Dokumentation:</strong> Der &bdquo;Performance Tuning&ldquo;-Leitfaden von Apache Spark bestätigt für <code>spark.sql.shuffle.partitions</code> den Standardwert von 200 sowie den Hinweis, dass dieser Wert bei aktivierter Adaptive Query Execution (<code>spark.sql.adaptive.enabled</code>) zur Laufzeit automatisch angepasst wird. Für <code>spark.sql.autoBroadcastJoinThreshold</code> nennt die Dokumentation den Standardwert 10&nbsp;MB und weist ausdrücklich darauf hin, dass der Wert <code>-1</code> den automatischen Broadcast vollständig deaktiviert; aktuell werden zudem nur Tabellen unterstützt, für die <code>ANALYZE TABLE ... COMPUTE STATISTICS</code> ausgeführt wurde oder deren Größe der Dateistatistik entnommen werden kann.<br>
+Quelle: <a href="https://spark.apache.org/docs/latest/sql-performance-tuning.html">Performance Tuning &ndash; Apache Spark Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

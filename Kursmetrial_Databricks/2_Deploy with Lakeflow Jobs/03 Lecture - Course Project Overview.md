@@ -1,0 +1,7 @@
+![Step 1 Cloud Storage](./Includes/images/lecture_course_project_overview/course_project_step_1_cloud_storage.png)
+![Step 2 Ingesting Data](./Includes/images/lecture_course_project_overview/course_project_step_2_ingesting_data.png)
+![Step 3 Joining Data](./Includes/images/lecture_course_project_overview/course_project_step_3_joining_data.png)
+![Step 4 If Else Block](./Includes/images/lecture_course_project_overview/course_project_step_4_if_else_block.png)
+![Step 5 For Each Task](./Includes/images/lecture_course_project_overview/course_project_step_5_for_each_task.png)
+![Step 6 Transforming Data](./Includes/images/lecture_course_project_overview/course_project_step_6_transforming_data.png)
+![Step 7 Dashboard Creation](./Includes/images/lecture_course_project_overview/course_project_step_7_dashboard_creation.png)

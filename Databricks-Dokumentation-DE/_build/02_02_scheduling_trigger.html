@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Jobs erstellen, planen und automatisieren (Scheduling & Trigger)</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Jobs erstellen, planen und automatisieren (Scheduling & Trigger)</h1>
+<p class="subtitle">Section 4 &middot; Working with Lakeflow Jobs &middot; Quelle: Kurs 2, Kapitel 6&ndash;7</p>
+
+<p>Ein Job, der nur manuell gestartet wird, ist für den Produktivbetrieb wenig hilfreich. Damit Datenpipelines zuverlässig und ohne menschliches Zutun laufen, bietet Lakeflow Jobs ein reichhaltiges Set an <strong>Trigger-Typen</strong> sowie Mechanismen, um Tasks zur Laufzeit mit <strong>Parametern</strong> zu versorgen. Dieses Dokument behandelt beides: die Automatisierung der Ausführung und die Konfiguration wiederverwendbarer, flexibler Tasks.</p>
+
+<h2>1. Parameter, Task Values und dynamische Referenzen</h2>
+<p>Lakeflow Jobs unterscheidet zwischen mehreren Ebenen der Parametrisierung:</p>
+<ul>
+<li><strong>Job-Parameter</strong> &ndash; auf Job-Ebene definierte Schlüssel-Wert-Paare, die automatisch an alle Tasks weitergereicht werden. Sie eignen sich, um sinnvolle Standardwerte (z.&nbsp;B. Katalog- oder Schemanamen) zentral festzulegen.</li>
+<li><strong>Task-Parameter</strong> &ndash; auf einzelne Tasks beschränkte Schlüssel-Wert-Paare für feingranulare Steuerung. Wichtig: Existiert ein Schlüssel sowohl auf Job- als auch auf Task-Ebene, gewinnt der <strong>Job-Parameter</strong>.</li>
+<li><strong>Task Values</strong> &ndash; werden zur Laufzeit berechnet und dienen dem Datenaustausch zwischen Tasks, z.&nbsp;B. um eine Datensatzanzahl oder ein Prüfergebnis an einen nachgelagerten Task weiterzugeben.</li>
+<li><strong>Dynamische Wertreferenzen</strong> (<code>{{ }}</code>-Syntax) &ndash; erlauben den Zugriff auf Laufzeitkontext wie <code>{{job.run_id}}</code>, <code>{{task.name}}</code> oder auf Ergebnisse anderer Tasks wie <code>{{tasks.data-validation.values.record_count}}</code>.</li>
+</ul>
+<p>In einem Notebook-Task lassen sich Parameter über <code>dbutils.widgets.get(...)</code> abrufen, während Task Values explizit gesetzt und gelesen werden:</p>
+
+<pre class="code python"># Einen Task-Parameter im Notebook auslesen
+my_catalog = dbutils.widgets.get(&quot;catalog&quot;)
+my_schema  = dbutils.widgets.get(&quot;schema&quot;)
+
+# Einen berechneten Wert fuer nachgelagerte Tasks bereitstellen
+duplicate_exists = df.count() &gt; df.dropDuplicates().count()
+dbutils.jobs.taskValues.set(key=&quot;has_duplicates&quot;, value=duplicate_exists)
+
+# Diesen Wert in einem anderen (downstream) Task auslesen
+upstream_flag = dbutils.jobs.taskValues.get(
+    taskKey=&quot;customers_sales_summary&quot;,
+    key=&quot;has_duplicates&quot;
+)</pre>
+
+<h2>2. Trigger-Typen im Überblick</h2>
+<p>Ein Trigger ist im Kern eine Regel, die automatisch einen Job-Lauf auslöst. Lakeflow Jobs unterstützt vier Kategorien:</p>
+<table>
+<tr><th>Trigger</th><th>Funktionsweise</th><th>Typischer Einsatzzweck</th></tr>
+<tr><td><strong>Scheduled (Zeitgesteuert)</strong></td><td>Einfache UI-Schedules (stündlich/täglich/wöchentlich) oder volle Cron-Syntax für komplexe Zeitpläne</td><td>Tägliche ETL-Läufe, wöchentliche Reports, monatliche Aggregationen</td></tr>
+<tr><td><strong>File Arrival</strong></td><td>Überwacht einen Cloud-Speicherort bzw. ein Unity-Catalog-Volume auf neue Dateien</td><td>Partnerdaten-Feeds, unregelmäßig eintreffende Dateien</td></tr>
+<tr><td><strong>Table Update</strong></td><td>Löst aus, wenn sich eine oder mehrere überwachte Quelltabellen ändern (bis zu 10 Tabellen, &bdquo;any&ldquo; oder &bdquo;all&ldquo;)</td><td>Ereignisgesteuerte Weiterverarbeitung ohne festen Zeitplan</td></tr>
+<tr><td><strong>Continuous</strong></td><td>Startet automatisch einen neuen Lauf, sobald der vorherige beendet ist</td><td>Dauerhaft laufende Streaming-Workloads</td></tr>
+</table>
+<p>Bei der <strong>Table-Update-Trigger</strong>-Konfiguration lassen sich zusätzlich zwei Feinsteuerungen setzen: <em>Minimum time between triggers</em> verhindert zu häufiges Auslösen bei schnell aufeinanderfolgenden Tabellenänderungen, und <em>Wait after last change</em> verzögert den Start, bis seit der letzten Änderung eine bestimmte Zeit vergangen ist &ndash; nützlich, wenn Daten in mehreren Batches eintreffen und erst nach vollständigem Eintreffen verarbeitet werden sollen.</p>
+
+<h2>3. File-Arrival-Trigger in der Praxis</h2>
+<p>Ein File-Arrival-Trigger wird auf ein Unity-Catalog-Volume oder einen Cloud-Speicherpfad gerichtet. Sobald eine neue Datei erscheint, startet der Job automatisch &ndash; standardmäßig prüft Databricks etwa einmal pro Minute auf Änderungen. Wichtig: Nur wirklich <em>neue</em> Dateien lösen einen Lauf aus; das Überschreiben einer Datei mit demselben Namen tut dies nicht. Zudem gilt eine Obergrenze von 1000 Dateien pro Trigger-Auslösung.</p>
+
+<pre class="code sql">-- Volume anlegen, das als Ueberwachungsort fuer den File-Arrival-Trigger dient
+CREATE VOLUME IF NOT EXISTS trigger_storage_location;
+
+-- Verfuegbare Volumes im aktuellen Schema anzeigen
+SHOW VOLUMES;</pre>
+
+<figure class="img">
+<img src="assets/02/job_schedules_triggers_overview.png">
+<figcaption>Lakeflow Jobs unterstützt zeitgesteuerte, ereignisgesteuerte und kontinuierliche Trigger.</figcaption>
+</figure>
+
+<h2>4. Benachrichtigungen und Retry-Policies</h2>
+<p>Sowohl auf Job- als auch auf Task-Ebene lassen sich <strong>Benachrichtigungen</strong> konfigurieren &ndash; per E-Mail, Microsoft Teams, PagerDuty, Slack oder Webhook. Job-Level-Benachrichtigungen eignen sich für Stakeholder, die nur am Gesamtergebnis interessiert sind; Task-Level-Benachrichtigungen erlauben granularere Alarmierung, etwa sofortige Meldungen bei fehlgeschlagenen Datenqualitätsprüfungen. Neben Erfolg/Fehlschlag lassen sich auch Schwellenwerte für <em>Late Jobs</em> (Laufzeitüberschreitung) oder <em>Streaming Backlog</em> konfigurieren.</p>
+<p>Eine durchdachte <strong>Retry-Policy</strong> berücksichtigt die Art des Fehlers (z.&nbsp;B. transiente Netzwerkprobleme vs. Datenqualitätsprobleme), die Auswirkung wiederholter Ausführung auf Cluster-Ressourcen sowie geschäftliche SLA-Vorgaben, die das Zeitfenster für Wiederholungen begrenzen können.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Neben den vier hier vorgestellten Trigger-Typen weist die aktuelle Dokumentation darauf hin, dass für optimale Performance und Skalierbarkeit &bdquo;File Events&ldquo; auf dem externen Speicherort aktiviert werden sollten, auf dem die überwachten Tabellen liegen &ndash; dies verbessert sowohl Table-Update-Trigger als auch den zugrunde liegenden Auto Loader. Die End-to-End-Latenz liegt bei Table-Update- und File-Arrival-Triggern typischerweise bei ein bis zwei Minuten zzgl. der Zeit für Cluster-/Compute-Start.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/jobs/trigger-table-update">Trigger jobs when source tables are updated &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

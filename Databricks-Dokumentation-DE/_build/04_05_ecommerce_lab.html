@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Praxisbeispiel: Multi-Source E-Commerce-Pipeline</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Praxisbeispiel: Multi-Source E-Commerce-Pipeline</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: Kurs 5, Kapitel 9 (Lab)</p>
+
+<p>Die vorangegangenen Kapitel dieses Themenordners haben Multi-Flow-Ingestion, Liquid Clustering, erweiterte Expectations und das Quarantäne-Muster jeweils isoliert betrachtet. In der Praxis treten diese Techniken jedoch selten einzeln auf &ndash; ein realistisches Pipeline-Projekt kombiniert sie zu einem durchgängigen Ganzen. Als Abschluss dieses Themenordners dient daher ein zusammenfassendes Praxisbeispiel: Ein E-Commerce-Unternehmen erhält Bestellungen über zwei Kanäle &ndash; Website und mobile App &ndash; die in unterschiedlichen Formaten vorliegen und teils unterschiedliche Felder mitbringen. Ziel ist eine Pipeline, die beide Kanäle konsolidiert, validiert, um Produktstammdaten anreichert und wöchentliche Umsatzberichte für den Fachbereich bereitstellt.</p>
+
+<h2>1. Bronze: Multi-Flow-Ingestion aus zwei Kanälen</h2>
+<p>App-Bestellungen liegen als JSON vor, Web-Bestellungen als CSV &ndash; beide Formate enthalten teils unterschiedliche Spalten (z. B. <code>browser</code> und <code>session_id</code> nur bei Web, <code>os</code> und <code>device_model</code> nur bei App). Anstatt zwei getrennte Bronze-Tabellen zu pflegen, kommt hier &ndash; wie in Kapitel 6 dieser Section eingeführt &ndash; das <strong>Multi-Flow-Muster</strong> zum Einsatz: Eine gemeinsame Zieltabelle mit einer Superset-Spaltenliste wird von zwei unabhängigen Flows gespeist. Jeder Flow castet konsequent auf <code>STRING</code> und lässt kanal-spezifische Spalten, die er nicht liefert, implizit auf <code>NULL</code>:</p>
+
+<pre class="code sql">CREATE OR REPLACE STREAMING TABLE lab_1_bronze.combined_orders_raw
+(
+  order_id STRING, order_date STRING, customer_id STRING, sku STRING,
+  model STRING, category STRING, order_type STRING, channel STRING,
+  quantity STRING, unit_price STRING, discount_code STRING,
+  discount_amount STRING, total_amount STRING, payment_method STRING,
+  order_status STRING, city STRING, region STRING, ship_date STRING,
+  browser STRING, session_id STRING,           -- nur bei Web-Kanal befüllt
+  os STRING, app_version STRING, device_model STRING,  -- nur bei App-Kanal befüllt
+  source_file STRING, file_mod_time TIMESTAMP, ingestion_time TIMESTAMP
+)
+COMMENT &quot;Unified Bronze streaming table - web and app orders combined via multi-flow ingestion.&quot;
+TBLPROPERTIES (&#x27;pipelines.reset.allowed&#x27; = false);
+
+-- Flow 1: App-Bestellungen (JSON)
+CREATE FLOW app_orders_flow
+AS INSERT INTO lab_1_bronze.combined_orders_raw BY NAME
+SELECT
+  CAST(order_id AS STRING) AS order_id,
+  -- ... weitere gemeinsame Spalten ...
+  CAST(os AS STRING) AS os,
+  CAST(device_model AS STRING) AS device_model,
+  _metadata.file_name AS source_file,
+  current_timestamp() AS ingestion_time
+FROM STREAM read_files(
+  &#x27;${app_orders_source}&#x27;, format =&gt; &#x27;json&#x27;, schemaHints =&gt; &#x27;discount_code STRING&#x27;
+);
+
+-- Flow 2: Web-Bestellungen (CSV) - schreibt in dieselbe Zieltabelle
+CREATE FLOW web_orders_flow
+AS INSERT INTO lab_1_bronze.combined_orders_raw BY NAME
+SELECT
+  CAST(order_id AS STRING) AS order_id,
+  -- ... weitere gemeinsame Spalten ...
+  CAST(browser AS STRING) AS browser,
+  CAST(session_id AS STRING) AS session_id,
+  _metadata.file_name AS source_file,
+  current_timestamp() AS ingestion_time
+FROM STREAM read_files(
+  &#x27;${web_orders_source}&#x27;, format =&gt; &#x27;csv&#x27;, header =&gt; true, schemaHints =&gt; &#x27;discount_code STRING&#x27;
+);</pre>
+
+<p>Jeder Kanal besitzt dadurch seinen eigenen Checkpoint: Käme künftig ein dritter Vertriebskanal hinzu, ließe sich dieser als weiterer Flow ergänzen, ohne die Historie der bestehenden zwei Flows neu verarbeiten zu müssen.</p>
+
+<h2>2. Silver: Expectations und Stream-Static-Join</h2>
+<p>In der Silver-Schicht wird zunächst typisiert und validiert &ndash; mit einer bewussten Mischung aus <code>FAIL UPDATE</code> für die geschäftskritische Bestell-ID, <code>DROP ROW</code> für unbrauchbare Zeilen (fehlende SKU, unplausible Menge) und <code>WARN</code> für Auffälligkeiten, die zwar geprüft, aber nicht blockiert werden sollen. Die Tabelle nutzt zugleich <code>CLUSTER BY AUTO</code> für Liquid Clustering:</p>
+
+<pre class="code sql">CREATE OR REFRESH STREAMING TABLE lab_2_silver.orders_clean
+(
+  CONSTRAINT valid_order_id    EXPECT (order_id IS NOT NULL) ON VIOLATION FAIL UPDATE,
+  CONSTRAINT valid_sku         EXPECT (sku IS NOT NULL)       ON VIOLATION DROP ROW,
+  CONSTRAINT positive_quantity EXPECT (quantity &gt;= 1)         ON VIOLATION DROP ROW,
+  CONSTRAINT positive_unit_price EXPECT (unit_price &gt; 0),     -- WARN (Default)
+  CONSTRAINT valid_total_amount  EXPECT (total_amount &gt;= 0)   -- WARN (Default)
+)
+COMMENT &quot;Silver clean orders - type-cast, quality-validated, liquid-clustered.&quot;
+CLUSTER BY AUTO
+AS
+SELECT
+  order_id,
+  TRY_CAST(order_date AS TIMESTAMP) AS order_date,
+  customer_id, sku, model, category, order_type, channel,
+  TRY_CAST(quantity AS INT)      AS quantity,
+  TRY_CAST(unit_price AS DOUBLE) AS unit_price,
+  TRY_CAST(total_amount AS DOUBLE) AS total_amount,
+  source_file, ingestion_time
+FROM STREAM lab_1_bronze.combined_orders_raw;
+
+-- Produktkatalog als Materialized View: die statische Seite des Joins
+CREATE OR REFRESH MATERIALIZED VIEW lab_2_silver.product_catalog_ref
+COMMENT &quot;Product catalog reference - brand, category, and list price per SKU.&quot;
+AS
+SELECT sku, brand, category AS catalog_category,
+       CAST(list_price AS DOUBLE) AS list_price,
+       CAST(is_active AS BOOLEAN) AS is_active
+FROM read_files(&#x27;${product_catalog_source}&#x27;, format =&gt; &#x27;csv&#x27;, header =&gt; true);
+
+-- Stream-Static-Join: Streaming-Bestellungen werden bei jedem Trigger
+-- gegen den (statischen) Produktkatalog angereichert
+CREATE OR REFRESH STREAMING TABLE lab_2_silver.orders_enriched
+COMMENT &quot;Enriched Silver orders - stream-static join adds brand, catalog category, and list price.&quot;
+CLUSTER BY AUTO
+AS
+SELECT
+  o.order_id, DATE(o.order_date) AS order_date, o.customer_id, o.sku,
+  o.order_type, o.channel, o.quantity, o.unit_price, o.total_amount,
+  p.brand, p.catalog_category, p.list_price,
+  ROUND(o.unit_price - p.list_price, 2) AS price_vs_catalog,
+  p.is_active AS sku_is_active
+FROM STREAM lab_2_silver.orders_clean AS o
+LEFT JOIN lab_2_silver.product_catalog_ref AS p
+  ON o.sku = p.sku;</pre>
+
+<p>Der <strong>Stream-Static-Join</strong> ist dabei das Muster, das bereits in Kapitel 4 dieser Section (Streaming Joins) eingeführt wurde: Die Streaming-Seite (<code>orders_clean</code>) wird inkrementell verarbeitet, während die statische Seite (<code>product_catalog_ref</code>) bei jedem Pipeline-Lauf neu gelesen wird &ndash; so fließen auch nachträgliche Änderungen am Produktkatalog (z. B. ein aktualisierter Listenpreis) in künftige Läufe ein. Der <code>LEFT JOIN</code> sorgt dafür, dass Bestellungen auch dann erhalten bleiben, wenn die zugehörige SKU noch nicht im Katalog gepflegt ist.</p>
+
+<figure class="img">
+<img src="assets/04/lab_pipeline_graph.png">
+<figcaption>Der Pipeline-Graph im Editor zeigt den vollständigen Datenfluss: die Multi-Flow-Bronze-Tabelle, die validierte und liquid-geclusterte Silver-Tabelle sowie deren Anreicherung über den Stream-Static-Join mit dem Produktkatalog.</figcaption>
+</figure>
+
+<h2>3. Gold: aggregierte Materialized View für den Fachbereich</h2>
+<p>Den Abschluss bildet eine Gold-Materialized-View, die aus den angereicherten Bestelldaten die für Fachbereiche relevanten Kennzahlen aggregiert &ndash; Umsatz, Rabatte, Bestellmengen, jeweils aufgeschlüsselt nach Kategorie, Marke, Kanal und Region:</p>
+
+<pre class="code sql">CREATE OR REPLACE MATERIALIZED VIEW lab_3_gold.weekly_revenue_by_category
+COMMENT &quot;Gold MV: Daily gross revenue, units, and order count by category and channel.&quot;
+AS
+SELECT
+    order_date,
+    catalog_category AS category,
+    brand,
+    order_type       AS channel,
+    region,
+    COUNT(DISTINCT order_id)                            AS total_orders,
+    SUM(quantity)                                        AS units_sold,
+    ROUND(SUM(total_amount), 2)                          AS gross_revenue,
+    ROUND(SUM(discount_amount), 2)                       AS total_discounts,
+    ROUND(SUM(total_amount) - SUM(discount_amount), 2)   AS net_revenue,
+    ROUND(AVG(total_amount), 2)                           AS avg_order_value,
+    COUNT(CASE WHEN discount_code IS NOT NULL THEN 1 END) AS discounted_orders,
+    current_timestamp()                                    AS last_refreshed
+FROM lab_2_silver.orders_enriched
+WHERE order_date IS NOT NULL AND catalog_category IS NOT NULL
+GROUP BY order_date, catalog_category, brand, order_type, region;</pre>
+
+<p>Diese Materialized View wird bei jedem Pipeline-Lauf inkrementell aktualisiert und bildet die Grundlage für Dashboards, die Umsatzentwicklung nach Produktkategorie und Vertriebskanal visualisieren. Als Materialized View berechnet sie sich automatisch neu, sobald sich die zugrunde liegenden Silver-Daten ändern &ndash; ohne dass ein manueller Aktualisierungsprozess gepflegt werden müsste.</p>
+
+<h2>4. Das Gesamtbild</h2>
+<p>Diese Lab-Pipeline fasst damit die zentralen Themen des Ordners in einem einzigen, durchgängigen Beispiel zusammen: Multi-Flow-Ingestion konsolidiert heterogene Quellkanäle in einer Bronze-Tabelle, Expectations mit unterschiedlichen Verletzungsaktionen sichern die Datenqualität in der Silver-Schicht, Liquid Clustering optimiert das Datenlayout ohne manuelles Tuning, ein Stream-Static-Join reichert Streaming-Daten um Referenzdaten an, und eine Gold-Materialized-View liefert am Ende konsumierbare Kennzahlen für den Fachbereich. Wer diese Bausteine einzeln verstanden hat, kann sie &ndash; wie hier gezeigt &ndash; in nahezu beliebiger Kombination zu robusten, produktionsreifen Pipelines zusammensetzen.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks führt dieses Kurskapitel unter dem offiziellen Schulungstitel &bdquo;Advanced Techniques with Spark Declarative Pipelines&ldquo; und betont in den zugehörigen Best-Practice-Leitfäden zu Lakeflow Declarative Pipelines, dass produktionsreife Pipelines genau diese Kombination aus modularer Multi-Flow-Ingestion, geschichteten Expectations und materialisierten Gold-Layern als Standardarchitektur vorsehen &ndash; ergänzt um Monitoring über den Pipeline-Event-Log, der Ausführungsfortschritt, Datenqualitätsergebnisse und Lineage-Informationen für jede Tabelle protokolliert.<br>
+Quelle: <a href="https://www.databricks.com/training/catalog/advanced-techniques-with-spark-declarative-pipeline-2972">Advanced Techniques with Spark Declarative Pipelines</a> &middot; <a href="https://docs.databricks.com/aws/en/ldp/best-practices">Best practices for Lakeflow Spark Declarative Pipelines</a> &ndash; Databricks-Dokumentation</div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

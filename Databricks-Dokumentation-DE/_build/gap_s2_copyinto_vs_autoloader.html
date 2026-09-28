@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>COPY INTO vs. Auto Loader: Entscheidungskriterien und Syntaxdetails</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>COPY INTO vs. Auto Loader: Entscheidungskriterien und Syntaxdetails</h1>
+<p class="subtitle">Section 2 &middot; Data Ingestion and Loading &middot; Quelle: Udemy-Kursmaterial &bdquo;Incremental Data Ingestion from Files&ldquo;, erg&auml;nzt mit Databricks-Dokumentation</p>
+
+<p>Kapitel 1 dieser Section hat <code>COPY INTO</code> und Auto Loader bereits im Überblick vorgestellt, Kapitel 6 die Schema-Mechanik von Auto Loader vertieft. Dieses Kapitel ergänzt die fehlende <strong>Entscheidungsgrundlage</strong>: konkrete Größenordnungen, ab wann welches Werkzeug sinnvoll ist, sowie eine bislang nicht gezeigte <code>COPY INTO</code>-Syntaxvariante mit <code>FORMAT_OPTIONS</code>.</p>
+
+<h2>1. COPY INTO mit FORMAT_OPTIONS</h2>
+<p>Neben <code>COPY_OPTIONS</code> (steuert das Verhalten des Ladevorgangs selbst, z. B. <code>mergeSchema</code>) unterstützt <code>COPY INTO</code> zusätzlich die Klausel <code>FORMAT_OPTIONS</code>, mit der sich Eigenschaften des <strong>Quelldateiformats</strong> festlegen lassen &ndash; etwa Trennzeichen oder ob die erste Zeile eine Kopfzeile ist:</p>
+<pre class="code sql">COPY INTO my_table
+  FROM &#x27;/path/to/files&#x27;
+  FILEFORMAT = CSV
+  FORMAT_OPTIONS (&#x27;delimiter&#x27; = &#x27;|&#x27;, &#x27;header&#x27; = &#x27;true&#x27;)
+  COPY_OPTIONS (&#x27;mergeSchema&#x27; = &#x27;true&#x27;);</pre>
+
+<figure class="img">
+<img src="assets/s2/copy_into_format_options_example.png">
+<figcaption>COPY INTO mit FORMAT_OPTIONS: steuert, wie die CSV-Quelldateien selbst gelesen werden (hier Pipe-Trennzeichen und Kopfzeile), unabhängig von COPY_OPTIONS für den Ladevorgang.</figcaption>
+</figure>
+
+<h2>2. Entscheidungskriterium: Dateianzahl</h2>
+<p>Bei der Wahl zwischen <code>COPY INTO</code> und Auto Loader gibt Databricks eine konkrete Faustregel für die erwartete <strong>Größenordnung</strong> der eingehenden Dateien vor:</p>
+<table>
+<tr><th></th><th>COPY INTO</th><th>Auto Loader</th></tr>
+<tr><td>Empfohlen ab</td><td>Dateien im Bereich von <strong>Tausenden</strong></td><td>Dateien im Bereich von <strong>Millionen oder mehr</strong></td></tr>
+<tr><td>Verarbeitungskapazität</td><td>Weniger effizient bei sehr großer Skalierung</td><td>Kann laut Databricks auf <strong>Milliarden von Dateien</strong> skalieren, mit nahezu Echtzeit-Ingestion von <strong>Millionen Dateien pro Stunde</strong></td></tr>
+<tr><td>Verarbeitungsmodus</td><td>Ein Batch pro Aufruf</td><td>Teilt die Verarbeitung automatisch in mehrere Micro-Batches auf, dadurch effizienter bei Skalierung</td></tr>
+</table>
+<p>Databricks empfiehlt Auto Loader entsprechend generell als <strong>Best Practice</strong> für die Ingestion aus Cloud-Objektspeicher, sobald mit wachsenden oder sehr großen Dateimengen zu rechnen ist &ndash; <code>COPY INTO</code> bleibt vor allem für überschaubare, wiederkehrende Batch-Ladevorgänge geeignet (siehe auch die Priorisierungsregel in Kapitel 8 dieser Section).</p>
+
+<figure class="img">
+<img src="assets/s2/copy_into_vs_autoloader.png">
+<figcaption>Faustregel zur Werkzeugwahl: COPY INTO für Dateimengen im Tausenderbereich, Auto Loader ab Millionen von Dateien und für nahezu Echtzeit-Ingestion.</figcaption>
+</figure>
+
+<h2>3. Warum Auto Loader bei Skalierung effizienter ist</h2>
+<p>Die Checkpointing-, Fehlertoleranz- und Exactly-Once-Mechanik von Auto Loader wurde bereits generisch in Section 3 (Kapitel zu Spark Structured Streaming) erklärt &ndash; sie gilt unverändert auch hier, da Auto Loader intern auf Structured Streaming aufbaut. Der Effizienzvorteil bei großen Dateimengen entsteht dadurch, dass Auto Loader neue Dateien nicht bei jedem Lauf vollständig aus dem Zielverzeichnis neu auflisten muss (siehe Erkennungsmodi in Kapitel 6), sondern den bereits verarbeiteten Zustand fortlaufend fortschreibt &ndash; <code>COPY INTO</code> muss dagegen bei jedem Aufruf den gesamten Quellpfad neu abgleichen, was mit wachsender Dateizahl zunehmend ins Gewicht fällt.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks führt als weiteres Abgrenzungskriterium an, dass <code>COPY INTO</code> sich für Datenquellen mit insgesamt wenigen Millionen Dateien eignet, während Auto Loader zusätzlich Vorteile bei der Dateierkennung (Directory Listing vs. File Notification, siehe Kapitel 6) und bei komplexen, sich häufig ändernden Verzeichnisstrukturen bietet. Beide Befehle sind zueinander nicht redundant: In produktiven Pipelines wird gelegentlich mit <code>COPY INTO</code> ein einmaliger historischer Backfill durchgeführt, während der laufende Betrieb anschließend auf Auto Loader umgestellt wird.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/copy-into/">COPY INTO &ndash; Databricks-Dokumentation</a> &middot; <a href="https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader/">What is Auto Loader? &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Monitoring, Fehlerbehandlung und Repair</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Monitoring, Fehlerbehandlung und Repair</h1>
+<p class="subtitle">Section 4 &middot; Working with Lakeflow Jobs &middot; Quelle: Kurs 2, Kapitel 11&ndash;12</p>
+
+<p>Auch der am besten gestaltete Workflow wird irgendwann einmal fehlschlagen &ndash; sei es wegen eines Konfigurationsfehlers, einer defekten Quelldatei oder eines vorübergehenden Ressourcenengpasses. Entscheidend ist nicht, Fehler vollständig zu vermeiden, sondern effizient auf sie reagieren zu können. Lakeflow Jobs bietet dafür die Funktion <strong>Repair and Rerun</strong> sowie umfangreiche Monitoring-Werkzeuge über System-Tabellen und die Spark-UI.</p>
+
+<h2>1. Repair and Rerun: gezielte Fehlerbehebung</h2>
+<p>Statt bei einem Fehlschlag den gesamten Job von vorne zu starten, erlaubt <strong>Repair Run</strong> die selektive Wiederholung: Nur die fehlgeschlagenen Tasks &ndash; und alle davon abhängigen Tasks &ndash; werden erneut ausgeführt. Das spart erheblich Zeit und Rechenkosten, besonders bei umfangreichen, mehrstufigen Workflows. Zusätzlich lassen sich beim Reparaturlauf <strong>Parameter überschreiben</strong>, sodass sich typische Fehlerursachen direkt beheben lassen:</p>
+<ul>
+<li><strong>Konfigurationsfehler</strong> &ndash; falsche Parameterwerte korrigieren</li>
+<li><strong>Ressourcenengpässe</strong> &ndash; mehr Arbeitsspeicher oder Compute für den betroffenen Task bereitstellen</li>
+<li><strong>Code-Fehler</strong> &ndash; nach einer Korrektur im Notebook nur die betroffenen Tasks neu laufen lassen</li>
+<li><strong>Datenqualitätsprobleme</strong> &ndash; Verarbeitungslogik anpassen und gezielt erneut ausführen</li>
+</ul>
+<p>Wichtig zu verstehen: Das Reparieren eines Laufs behebt nicht automatisch die <em>Job-Definition</em> selbst. Wurde beispielsweise ein falscher Parameterwert übergeben und im Reparaturlauf manuell korrigiert, muss diese Korrektur zusätzlich dauerhaft in der Job-Konfiguration nachgezogen werden, damit künftige reguläre Läufe nicht erneut fehlschlagen.</p>
+
+<h2>2. Repair and Rerun in der Praxis</h2>
+<p>Ein typischer Ablauf: Ein Task schlägt fehl, weil im Code eine falsche Spaltenbezeichnung referenziert wird. Die Fehlerbehebung erfolgt in wenigen Schritten:</p>
+<ol>
+<li>Im fehlgeschlagenen Lauf auf <strong>Repair run</strong> klicken.</li>
+<li>Den Fehler im zugrunde liegenden Notebook identifizieren und korrigieren (z.&nbsp;B. falschen Spaltennamen anpassen).</li>
+<li>Zur Job-Übersicht zurückkehren und erneut <strong>Repair run</strong> wählen &ndash; Databricks markiert automatisch den fehlgeschlagenen Task sowie alle abhängigen Tasks zur Wiederholung.</li>
+<li>Optional weitere Tasks für die Wiederholung an- oder abwählen.</li>
+</ol>
+<p>Die Farbkodierung im DAG hilft bei der schnellen Einschätzung eines Laufs:</p>
+<table>
+<tr><th>Farbe</th><th>Bedeutung</th></tr>
+<tr><td>Grau</td><td>Task noch nicht gestartet</td></tr>
+<tr><td>Grün, gestreift</td><td>Task läuft aktuell</td></tr>
+<tr><td>Grün, durchgehend</td><td>Task erfolgreich abgeschlossen</td></tr>
+<tr><td>Rot, dunkel</td><td>Task fehlgeschlagen</td></tr>
+<tr><td>Rot, hell</td><td>Task übersprungen, da ein vorgelagerter Task fehlgeschlagen ist</td></tr>
+</table>
+
+<figure class="img">
+<img src="assets/02/repair_rerun_workflow.png">
+<figcaption>Repair and Rerun führt gezielt nur fehlgeschlagene Tasks und deren Abhängigkeiten erneut aus.</figcaption>
+</figure>
+
+<h2>3. Monitoring mit system.lakeflow</h2>
+<p>Für tiefergehende Analysen über einzelne Läufe hinaus bietet Databricks den System-Katalog <strong>system.lakeflow</strong>. Er protokolliert automatisch sämtliche Job-Aktivität über alle Workspaces einer Region hinweg und stellt unter anderem folgende Tabellen bereit:</p>
+<ul>
+<li><code>jobs</code> &ndash; grundlegende Job-Metadaten und Konfiguration</li>
+<li><code>job_tasks</code> &ndash; Task-Definitionen und -Konfigurationen</li>
+<li><code>job_run_timeline</code> &ndash; vollständige Ausführungshistorie jedes Job-Laufs</li>
+<li><code>job_task_run_timeline</code> &ndash; detaillierte Ausführungshistorie einzelner Tasks</li>
+<li><code>pipelines</code> &ndash; Informationen zu Lakeflow-Declarative-Pipelines-Läufen</li>
+</ul>
+<p>Die Timeline-Tabellen zerlegen lang laufende Jobs mittels <code>period_start_time</code> und <code>period_end_time</code> in Stundenabschnitte, was präzise Laufzeitanalysen, Nebenläufigkeits-Tracking und SLA-Messungen ermöglicht &ndash; auch für komplexe, lange laufende Workflows. Damit lassen sich Kostenanalysen, Performance-Trends und Ressourcenauslastung systematisch auswerten:</p>
+
+<pre class="code sql">-- Verfuegbare Tabellen im system.lakeflow-Schema anzeigen
+SHOW TABLES IN system.lakeflow;
+
+-- Jobs mit ihrer Task-Ausfuehrungshistorie verknuepfen
+SELECT jobs.workspace_id,
+       jobs.name AS job_name,
+       jobs.job_id,
+       timeline.run_id,
+       timeline.period_start_time,
+       timeline.period_end_time,
+       timeline.task_key,
+       timeline.result_state
+FROM system.lakeflow.jobs AS jobs
+INNER JOIN system.lakeflow.job_task_run_timeline AS timeline
+  ON jobs.job_id = timeline.job_id
+WHERE lower(jobs.name) LIKE &#x27;demo_12_retail_job_%&#x27;
+ORDER BY timeline.period_start_time;</pre>
+
+<h2>4. Performance-Analyse mit der Spark-UI</h2>
+<p>Für die Detailanalyse einzelner Task-Läufe liefert die <strong>Spark-UI</strong> zusätzliche Einblicke: Die Ausführungs-Timeline zeigt Task-Dauer, Überlappungen und Engpässe auf einen Blick; ein Klick auf einzelne Stages offenbart Ausführungspläne, Optimierungsentscheidungen, Dateizugriffsmuster und Partitionsinformationen. Typische Warnsignale sind eine hohe <em>Planning Time</em> (deutet auf Optimierungsbedarf bei Partitionierung oder Metadaten hin) und eine hohe <em>Execution Time</em> (deutet auf Join-Optimierung, Broadcast-Strategien oder Skew-Behandlung hin).</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Die aktuelle Dokumentation unterscheidet klar zwischen &bdquo;Restart&ldquo; (kompletter Neustart des gesamten Jobs) und &bdquo;Repair Run&ldquo; (gezielte Wiederholung nur der fehlgeschlagenen und abhängigen Tasks). Wichtige Einschränkung: Repair Run ist nur für Jobs mit mindestens zwei Tasks verfügbar; bei einem einzelnen Task muss der Job komplett über &bdquo;Run now&ldquo; neu gestartet werden. Zudem macht Lakeflow Jobs Tasks nicht automatisch idempotent &ndash; hat ein Task vor seinem Fehlschlag bereits einen Teil seiner Ausgabe geschrieben, kann eine Wiederholung zu doppelten Daten führen. Dies sollte bei der Pipeline-Gestaltung (z.&nbsp;B. durch idempotente MERGE-Logik) berücksichtigt werden.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/jobs/repair-job-failures">Troubleshoot and repair job failures &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

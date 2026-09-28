@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Spalten, Zeilen und Tabellenstrukturen bearbeiten</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Spalten, Zeilen und Tabellenstrukturen bearbeiten</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: PySpark-/Databricks-Referenzdokumentation</p>
+
+<p>Neben dem Zusammenführen mehrerer Tabellen gehört das gezielte Verändern einer einzelnen Tabelle zum Kernhandwerk jeder PySpark-Transformation: Spalten hinzufügen oder entfernen, umbenennen, aufteilen, Zeilen filtern und verschachtelte Arrays auf einzelne Zeilen &bdquo;auffalten&ldquo;. Der Exam Guide fasst dies unter dem Ziel &bdquo;Manipulate columns, rows, and table structures&ldquo; zusammen. Als Grundlage dient eine kleine, frei erfundene Bestelltabelle:</p>
+
+<pre class="code python">bestellungen = spark.createDataFrame([
+    (1, &quot;Max Mustermann&quot;, &quot;Kaffee,Zucker,Milch&quot;, 24.90, &quot;2024-05-01&quot;),
+    (2, &quot;Erika Beispiel&quot;,  &quot;Tee,Kekse&quot;,           11.50, &quot;2024-05-03&quot;),
+    (3, &quot;Jan Schmidt&quot;,     &quot;Kaffee&quot;,               8.90, &quot;2024-05-04&quot;),
+], [&quot;order_id&quot;, &quot;customer_name&quot;, &quot;items_raw&quot;, &quot;amount&quot;, &quot;order_date&quot;])
+
+bestellungen.createOrReplaceTempView(&quot;bestellungen&quot;)</pre>
+
+<h2>1. Spalten hinzufügen: withColumn()</h2>
+<p><code>withColumn(name, expr)</code> fügt einer bestehenden Tabelle eine neue Spalte hinzu oder überschreibt eine vorhandene Spalte gleichen Namens. Das zugrunde liegende DataFrame bleibt dabei unverändert (Spark-DataFrames sind unveränderlich, <em>immutable</em>) &ndash; <code>withColumn</code> gibt stets ein <em>neues</em> DataFrame zurück.</p>
+<pre class="code python">from pyspark.sql.functions import col, round as spark_round
+
+bestellungen_erw = bestellungen.withColumn(
+    &quot;amount_mit_steuer&quot;, spark_round(col(&quot;amount&quot;) * 1.19, 2)
+)</pre>
+<pre class="code sql">SELECT *, ROUND(amount * 1.19, 2) AS amount_mit_steuer
+FROM bestellungen;</pre>
+<p>Sollen mehrere Spalten gleichzeitig ergänzt werden, existiert seit Spark&nbsp;3.3 zusätzlich <code>withColumns()</code>, das ein Dictionary aus Spaltenname und Ausdruck entgegennimmt, statt <code>withColumn</code> mehrfach hintereinander aufzurufen.</p>
+
+<h2>2. Spalten entfernen: drop()</h2>
+<p><code>drop()</code> entfernt eine oder mehrere Spalten aus dem DataFrame. Da hier keine Bedingung geprüft wird, ist die Methode deutlich unkomplizierter als etwa ein Filter.</p>
+<pre class="code python">bestellungen_ohne_rohspalte = bestellungen.drop(&quot;items_raw&quot;)
+# mehrere Spalten gleichzeitig entfernen:
+bestellungen.drop(&quot;items_raw&quot;, &quot;order_date&quot;)</pre>
+<pre class="code sql">SELECT order_id, customer_name, amount, order_date
+FROM bestellungen;
+-- Alternativ dauerhaft am Tabellenschema:
+ALTER TABLE bestellungen DROP COLUMN items_raw;</pre>
+
+<h2>3. Spalten umbenennen: withColumnRenamed()</h2>
+<pre class="code python">bestellungen_umbenannt = bestellungen.withColumnRenamed(&quot;customer_name&quot;, &quot;kunde&quot;)
+# mehrere Umbenennungen verketten:
+bestellungen.withColumnRenamed(&quot;customer_name&quot;, &quot;kunde&quot;).withColumnRenamed(&quot;amount&quot;, &quot;betrag&quot;)</pre>
+<pre class="code sql">SELECT customer_name AS kunde, amount AS betrag
+FROM bestellungen;
+-- Alternativ dauerhaft am Tabellenschema:
+ALTER TABLE bestellungen RENAME COLUMN customer_name TO kunde;</pre>
+
+<h2>4. Spalten aufteilen: split()</h2>
+<p>Die Funktion <code>split(spalte, muster)</code> zerlegt eine String-Spalte anhand eines regulären Ausdrucks in ein <strong>Array</strong> von Teilstrings. Im Beispiel wird zum einen die kommaseparierte Artikel-Spalte <code>items_raw</code> in ein Array überführt, zum anderen der volle Kundenname anhand des Leerzeichens in Vor- und Nachname aufgeteilt.</p>
+<pre class="code python">from pyspark.sql.functions import split
+
+bestellungen_split = (
+    bestellungen
+    .withColumn(&quot;items&quot;, split(col(&quot;items_raw&quot;), &quot;,&quot;))
+    .withColumn(&quot;vorname&quot;, split(col(&quot;customer_name&quot;), &quot; &quot;).getItem(0))
+    .withColumn(&quot;nachname&quot;, split(col(&quot;customer_name&quot;), &quot; &quot;).getItem(1))
+)</pre>
+<pre class="code sql">SELECT
+  order_id,
+  split(items_raw, &#x27;,&#x27;)            AS items,
+  split(customer_name, &#x27; &#x27;)[0]     AS vorname,
+  split(customer_name, &#x27; &#x27;)[1]     AS nachname
+FROM bestellungen;</pre>
+
+<h2>5. Zeilen filtern: filter() / where()</h2>
+<p><code>filter()</code> und <code>where()</code> sind in PySpark vollständig gleichwertige Aliase &ndash; welche Variante gewählt wird, ist reine Geschmackssache bzw. Lesbarkeitsfrage (viele SQL-Entwickler bevorzugen <code>where()</code>).</p>
+<pre class="code python">bestellungen.filter(col(&quot;amount&quot;) &gt; 10)
+bestellungen.where(col(&quot;amount&quot;) &gt; 10)               # identisch zu filter()
+bestellungen.filter(&quot;amount &gt; 10 AND order_date &gt;= &#x27;2024-05-03&#x27;&quot;)  # als SQL-String-Ausdruck</pre>
+<pre class="code sql">SELECT * FROM bestellungen
+WHERE amount &gt; 10 AND order_date &gt;= &#x27;2024-05-03&#x27;;</pre>
+
+<h2>6. Arrays auffalten: explode()</h2>
+<p><code>explode()</code> wandelt eine Array-Spalte in mehrere Zeilen um: Für jedes Element des Arrays entsteht eine eigene Ausgabezeile, während alle übrigen Spalten unverändert dupliziert werden. Das ist besonders nützlich, um aus der zuvor per <code>split()</code> erzeugten <code>items</code>-Spalte eine Zeile <em>pro Artikel</em> zu machen.</p>
+<pre class="code python">from pyspark.sql.functions import explode
+
+artikel_zeilen = bestellungen_split.withColumn(&quot;item&quot;, explode(col(&quot;items&quot;)))
+# Ergebnis: aus 3 Bestellungen mit insgesamt 4 Artikeln (Bestellung 1 hat 3 Artikel,
+# Bestellung 2 hat 2, Bestellung 3 hat 1) werden 6 Zeilen, jeweils ein Artikel pro Zeile.</pre>
+<pre class="code sql">SELECT order_id, customer_name, item
+FROM bestellungen_split
+LATERAL VIEW explode(items) AS item;
+
+-- Alternative moderne Schreibweise ohne LATERAL VIEW:
+SELECT order_id, customer_name, explode(items) AS item
+FROM bestellungen_split;</pre>
+<p>Enthält die Array-Spalte in manchen Zeilen <code>NULL</code> oder ein leeres Array, gehen diese Zeilen bei <code>explode()</code> vollständig verloren, da es kein Element zum Auffalten gibt. Soll die Ursprungszeile in diesem Fall dennoch (mit <code>NULL</code> in der neuen Spalte) erhalten bleiben, hilft die Variante <code>explode_outer()</code> mit identischer Syntax.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen PySpark-Dokumentation:</strong> <code>pyspark.sql.functions.explode()</code> gibt laut Referenz &bdquo;a new row for each element in the given array or map&ldquo; zurück; für leere oder <code>NULL</code>-wertige Arrays/Maps wird standardmäßig keine Zeile erzeugt &ndash; hierfür ist explizit <code>explode_outer()</code> vorgesehen. Seit Spark&nbsp;3.3 ergänzt <code>DataFrame.withColumns()</code> die Einzelspalten-Methode <code>withColumn()</code> um die Möglichkeit, mehrere neue oder ersetzte Spalten in einem Aufruf über ein Dictionary zu definieren.<br>
+Quelle: <a href="https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.explode.html">pyspark.sql.functions.explode &ndash; Apache Spark Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

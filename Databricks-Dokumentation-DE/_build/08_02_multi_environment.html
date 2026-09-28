@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Multi-Environment-Deployments (Targets & Variablen)</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Multi-Environment-Deployments (Targets & Variablen)</h1>
+<p class="subtitle">Section 5 &middot; Implementing CI-CD &middot; Quelle: Kurs 8, Modul 03</p>
+
+<p>Ein Bundle, das nur eine einzige Zielumgebung kennt, deckt selten die Realität ab: Meist soll derselbe Job in einer kleinen, günstigen Entwicklungsumgebung getestet werden, bevor er unverändert gegen die vollständigen Produktionsdaten läuft &ndash; ohne die Job-Definition zweimal pflegen zu müssen. Declarative Automation Bundles lösen das über drei Mechanismen, die zusammenspielen: mehrere Einträge in der <code>targets</code>-Zuordnung, wiederverwendbare <strong>Bundle-Variablen</strong> und die <code>include</code>-Zuordnung, mit der sich Ressourcen-Definitionen in eigene YAML-Dateien auslagern lassen.</p>
+
+<h2>1. Ressourcen modularisieren mit include</h2>
+<p>Statt die komplette Job-Definition direkt in <code>databricks.yml</code> zu schreiben, lagert man sie &ndash; sobald ein Projekt wächst &ndash; in eine eigene Datei im <code>resources</code>-Ordner aus und bindet sie über <code>include</code> ein. Das hält die Hauptdatei übersichtlich und erlaubt es, mehrere Personen parallel an unterschiedlichen Ressourcen zu arbeiten:</p>
+
+<pre class="code yaml">include:
+  - &quot;./resources/demo_03_job.job.yml&quot;       # Full Job Configuration within the resources folder</pre>
+
+<pre class="code yaml"># resources/demo_03_job.job.yml
+resources:
+  jobs:
+    demo03_job:
+      name: ${bundle.target}_demo3_dab_${workspace.current_user.userName}
+      tasks:
+        - task_key: create_bronze_table
+          notebook_task:
+            notebook_path: ../src/create_bronze_table.ipynb
+            source: WORKSPACE
+        - task_key: create_silver_table
+          depends_on:
+            - task_key: create_bronze_table
+          notebook_task:
+            notebook_path: ../src/create_silver_table.ipynb
+            source: WORKSPACE
+      parameters:
+      - name: display_target
+        default: ${bundle.target}
+      - name: catalog_name
+        default: ${var.target_catalog}</pre>
+
+<p>Auffällig ist, dass weder Jobname noch Katalog fest verdrahtet sind, sondern über Platzhalter (<code>${...}</code>) referenziert werden. <code>${bundle.target}</code> wird automatisch durch den Namen des aktuell deployten Targets ersetzt (z.&nbsp;B. <code>development</code> oder <code>production</code>); <code>${var.target_catalog}</code> verweist auf eine selbst definierte Bundle-Variable.</p>
+
+<h2>2. Bundle-Variablen und Lookup-Variablen</h2>
+<p>Variablen werden zentral in der Top-Level-Zuordnung <code>variables</code> deklariert und können sich gegenseitig referenzieren, sodass sich z.&nbsp;B. aus einem Benutzernamen automatisch mehrere Katalognamen ableiten lassen:</p>
+
+<pre class="code yaml">variables:
+  my_lab_user_name:
+    description: Add your lab user name
+    default: ${workspace.current_user.short_name}      # dynamisch der eigene Benutzername
+
+  catalog_dev:
+    description: Development catalog for the project. Append _1_dev to the user name.
+    default: ${var.my_lab_user_name}_1_dev
+
+  catalog_prod:
+    description: Production catalog for the project. Append _3_prod to the user name.
+    default: ${var.my_lab_user_name}_3_prod
+
+  target_catalog:
+    description: Target catalog to use for deployment - default is &#x27;dev&#x27;.
+    default: ${var.catalog_dev}
+
+  raw_data_path:
+    description: Path to source CSV files to ingest (dev/stage/prod) - default is &#x27;dev&#x27;.
+    default: /Volumes/${var.target_catalog}/default/health
+
+  ## Lookup-Variable: ermittelt die Cluster-ID anhand des Cluster-Namens
+  my_cluster_id:
+    description: Get the lab cluster ID using a lookup variable.
+    lookup:
+      cluster: labuser15933383_1784728005</pre>
+
+<p>Der letzte Eintrag zeigt eine <strong>Lookup-Variable</strong>: Statt einen festen Wert einzutragen, sucht die CLI beim Deployment ein bestehendes Objekt (hier: einen Cluster) über seinen Namen und löst die Variable automatisch zu dessen ID auf. Lookups funktionieren für zahlreiche Objekttypen, u.&nbsp;a. <code>cluster</code>, <code>job</code>, <code>pipeline</code>, <code>warehouse</code>, <code>metastore</code> und <code>service_principal</code> &ndash; nützlich überall dort, wo eine Konfiguration auf eine ID verweisen muss, die je nach Workspace unterschiedlich ist.</p>
+
+<h2>3. Targets: pro Umgebung unterschiedliche Werte</h2>
+<p>Erst in der <code>targets</code>-Zuordnung bekommen die Variablen ihre konkreten, umgebungsspezifischen Werte. Jedes Target kann Werte aus <code>variables</code> überschreiben und sogar einzelne Task-Eigenschaften (z.&nbsp;B. das Rechencluster) direkt in der <code>resources</code>-Struktur überschreiben:</p>
+
+<pre class="code yaml">targets:
+
+  development:
+    mode: development
+    default: true
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
+    # Kleines Lab-Cluster fuer die Entwicklungsumgebung verwenden
+    resources:
+      jobs:
+        demo03_job:
+          tasks:
+            - task_key: create_bronze_table
+              existing_cluster_id: ${var.my_cluster_id}
+            - task_key: create_silver_table
+              existing_cluster_id: ${var.my_cluster_id}
+
+  production:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
+    ## Im Produktions-Target auf den Produktionskatalog umschalten
+    variables:
+        target_catalog: ${var.catalog_prod}</pre>
+
+<p>Im Beispiel bekommt nur die Entwicklungsumgebung ein fest zugewiesenes (kleines) Cluster &ndash; sinnvoll, weil die Entwicklungsdaten klein und statisch sind. Für <code>production</code> wird keine Compute-Vorgabe überschrieben, sodass der Job auf Serverless-Compute läuft, das sich automatisch an wachsende Datenmengen anpasst. Die Variable <code>target_catalog</code> zeigt standardmäßig auf den Dev-Katalog (<code>${var.catalog_dev}</code>); nur im <code>production</code>-Target wird sie explizit auf <code>${var.catalog_prod}</code> umgebogen &ndash; die Job-Definition selbst bleibt dabei komplett unverändert.</p>
+
+<figure class="img">
+<img src="assets/08/multi-env-dev-deployment.png">
+<figcaption>Derselbe Job, deployt im development-Target: Der Job-Name trägt automatisch das Präfix [dev &lt;benutzername&gt;], und beide Tasks laufen auf dem fest zugewiesenen Lab-Cluster.</figcaption>
+</figure>
+<figure class="img">
+<img src="assets/08/multi-env-prod-deployment.png">
+<figcaption>Dasselbe Bundle im production-Target deployt: Job-Parameter und Katalog wurden automatisch auf die Produktionswerte umgeschaltet.</figcaption>
+</figure>
+
+<h2>4. Bundle validieren, deployen und pro Ziel ausführen</h2>
+<p>Mit <code>--output json</code> lässt sich die vollständig aufgelöste Konfiguration (alle Variablen bereits ersetzt) prüfen, bevor tatsächlich deployt wird &ndash; hilfreich, um Substitutionsfehler frühzeitig zu erkennen:</p>
+
+<pre class="code bash"># Aufgeloeste Konfiguration im development-Target als JSON anzeigen
+databricks bundle validate --output json
+
+# In die Entwicklungsumgebung deployen und den Job dort ausfuehren
+databricks bundle deploy -t development
+databricks bundle run -t development demo03_job
+
+# Dieselbe, unveraenderte Bundle-Definition in die Produktion deployen
+databricks bundle deploy -t production
+databricks bundle run -t production demo03_job
+
+# Variablen bei Bedarf gezielt von der Kommandozeile ueberschreiben
+databricks bundle deploy --var=&quot;target_catalog=labuser123_3_prod&quot; -t production
+
+# Beide Umgebungen wieder aufraeumen
+databricks bundle destroy --auto-approve
+databricks bundle destroy -t production --auto-approve</pre>
+
+<table>
+<tr><th>Quelle des Variablenwerts</th><th>Priorität</th></tr>
+<tr><td><code>--var</code>-Option beim CLI-Aufruf</td><td>höchste Priorität</td></tr>
+<tr><td>Umgebungsvariable <code>BUNDLE_VAR_&lt;name&gt;</code></td><td>2</td></tr>
+<tr><td>Datei <code>variable-overrides.json</code></td><td>3</td></tr>
+<tr><td><code>variables</code>-Zuordnung innerhalb eines Targets</td><td>4</td></tr>
+<tr><td>Standardwert (<code>default</code>) in der Top-Level-<code>variables</code>-Zuordnung</td><td>niedrigste Priorität</td></tr>
+</table>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Targets sind laut Databricks der einfachste Weg, Umgebungsunterschiede abzubilden, ohne das Bundle zu duplizieren &ndash; typischerweise ändert ein Target nur den Ziel-Workspace, die Namensgebung der Ressourcen und eine kleine Menge an Laufzeitvariablen wie Katalog, Schema oder Service Principal, während alles andere beim Übergang von Dev zu Prod identisch bleibt. Für Lookup-Variablen gilt: Ist ein Lookup definiert, wird stets die aktuell aufgelöste ID des benannten Objekts verwendet, unabhängig vom Zielworkspace. Bei der Variablenauflösung gewinnt immer die erste gefundene Quelle in der oben gezeigten Prioritätsreihenfolge.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/dev-tools/bundles/variables">Substitutions and variables in Declarative Automation Bundles &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

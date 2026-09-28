@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Change Data Feed: Änderungen nachverfolgen & propagieren</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Change Data Feed: Änderungen nachverfolgen & propagieren</h1>
+<p class="subtitle">Section 7 &middot; Governance and Security &middot; Quelle: Kurs 6, DP 1.3 &amp; DP 1.4L</p>
+
+<p>Structured Streaming geht grundsätzlich davon aus, dass Quelltabellen nur angehängt (append-only) werden &ndash; Updates und Deletes an bereits gelesenen Daten passen nicht in dieses Modell. Genau hier setzt <strong>Change Data Feed (CDF)</strong> an: CDF verfolgt Zeilen-Änderungen zwischen Versionen einer Delta-Tabelle und macht Inserts, Updates und Deletes als eigenen, inkrementell lesbaren Datenstrom verfügbar. Für Datenschutz-Anwendungsfälle ist das unverzichtbar &ndash; insbesondere um Löschanfragen ("Recht auf Vergessenwerden") zuverlässig von einer Quelltabelle in alle nachgelagerten Tabellen zu propagieren.</p>
+
+<h2>1. Change Data Feed aktivieren</h2>
+<p>CDF ist standardmäßig <strong>nicht</strong> aktiviert und muss explizit eingeschaltet werden &ndash; entweder für einzelne Tabellen per <code>ALTER TABLE</code> oder global für alle künftig neu erstellten Tabellen.</p>
+
+<pre class="code sql">-- Fuer eine bestehende Tabelle aktivieren
+ALTER TABLE silver_users
+SET TBLPROPERTIES (delta.enableChangeDataFeed = true);
+
+-- Aktivierung pruefen
+DESCRIBE TABLE EXTENDED silver_users;
+-- ... [delta.enableChangeDataFeed=true] sollte unter Table Properties erscheinen</pre>
+
+<pre class="code python"># Global fuer alle neuen Tabellen der Session aktivieren
+spark.conf.set(&quot;spark.databricks.delta.properties.defaults.enableChangeDataFeed&quot;, True)</pre>
+
+<p>Sobald CDF aktiv ist, enthält jede Abfrage der Änderungshistorie drei zusätzliche Metadatenspalten:</p>
+<table>
+<tr><th>Spalte</th><th>Typ</th><th>Bedeutung</th></tr>
+<tr><td><code>_change_type</code></td><td>String</td><td><code>insert</code>, <code>delete</code>, <code>update_preimage</code>, <code>update_postimage</code></td></tr>
+<tr><td><code>_commit_version</code></td><td>Long</td><td>Delta-Log-Version, in der die Änderung committet wurde</td></tr>
+<tr><td><code>_commit_timestamp</code></td><td>Timestamp</td><td>Zeitpunkt des Commits</td></tr>
+</table>
+<p>Bei Updates erscheinen für jede geänderte Zeile zwei Einträge: <code>update_preimage</code> zeigt den Zustand vor, <code>update_postimage</code> den Zustand nach der Änderung.</p>
+
+<figure class="img">
+<img src="assets/05/cdf-output-example.png">
+<figcaption>Change Data Feed am Beispiel: aus dem Vergleich zweier Tabellenversionen entsteht eine Ausgabe mit Change Type, Zeitstempel und Version je betroffener Zeile.</figcaption>
+</figure>
+
+<h2>2. Änderungen lesen: Streaming oder table_changes()</h2>
+<p>Es gibt zwei Wege, CDF zu konsumieren. Für kontinuierliche Verarbeitung eignet sich ein Stream mit der Option <code>readChangeFeed</code> und <code>startingVersion</code>:</p>
+
+<pre class="code python">cdf_df = (spark.read
+               .format(&quot;delta&quot;)
+               .option(&quot;readChangeFeed&quot;, &quot;true&quot;)
+               .option(&quot;startingVersion&quot;, 2)   # ab welcher Version gelesen werden soll
+               .table(&quot;silver_users&quot;))
+
+display(cdf_df)</pre>
+
+<p>Für punktuelle Batch-Abfragen &ndash; etwa "was hat sich seit dem letzten Lauf geändert?" &ndash; eignet sich die SQL-Tabellenfunktion <code>table_changes(table_str, start [, end])</code>, die einen Ausschnitt der Änderungshistorie als normale Tabelle zurückgibt:</p>
+
+<pre class="code sql">-- Alle in der letzten Version eingefuegten Zeilen
+SELECT *
+FROM table_changes(&quot;silver_users&quot;, latest_version)
+WHERE _change_type = &quot;insert&quot;
+ORDER BY _commit_version;
+
+-- Alle geloeschten Zeilen seit Version 4
+SELECT *
+FROM table_changes(&quot;silver_users&quot;, 4)
+WHERE _change_type = &quot;delete&quot;;</pre>
+
+<h2>3. Löschungen propagieren: das Muster für DSGVO-Löschanfragen</h2>
+<p>Löschanfragen werden aus gutem Grund meist <strong>nicht</strong> in der regulären ETL-Pipeline mitverarbeitet, sondern in einem eigenen, auditierbaren Prozess. Ein typisches Muster: Eine Compliance-Tabelle <code>delete_requests</code> hält offene Löschanfragen mit Frist (<code>deadline</code>) und Status fest. Nach dem eigentlichen <code>DELETE</code> auf der Quelltabelle wird der Change Data Feed genutzt, um exakt dieselben Datensätze automatisiert in alle nachgelagerten (Gold-)Tabellen zu propagieren:</p>
+
+<pre class="code sql">-- 1. Loeschung auf der Quelltabelle ausfuehren
+DELETE FROM silver_users
+WHERE mrn IN (SELECT mrn FROM delete_requests);
+-- Delta erzeugt eine neue Tabellenversion mit Operation &quot;DELETE&quot;</pre>
+
+<pre class="code python"># 2. CDF-Stream ab der Delete-Version inkrementell lesen
+deleteDF = (spark.readStream
+                 .format(&quot;delta&quot;)
+                 .option(&quot;readChangeFeed&quot;, &quot;true&quot;)
+                 .option(&quot;startingVersion&quot;, 4)     # Version des DELETE-Commits
+                 .table(&quot;silver_users&quot;))
+
+# 3. Fuer jeden Mikro-Batch: Loeschung in die Gold-Tabelle propagieren
+#    und den Anfrage-Status als &quot;erledigt&quot; markieren
+def process_deletes(microBatchDF, batchId):
+    microBatchDF.createOrReplaceTempView(&quot;deletes&quot;)
+
+    spark.sql(&quot;&quot;&quot;
+        MERGE INTO gold_users u
+        USING deletes d
+        ON u.mrn = d.mrn
+        WHEN MATCHED
+            THEN DELETE
+    &quot;&quot;&quot;)
+
+    spark.sql(&quot;&quot;&quot;
+        MERGE INTO delete_requests dr
+        USING deletes d
+        ON d.mrn = dr.mrn
+        WHEN MATCHED
+          THEN UPDATE SET status = &quot;deleted&quot;
+    &quot;&quot;&quot;)
+
+query = (deleteDF.writeStream
+                 .foreachBatch(process_deletes)
+                 .outputMode(&quot;update&quot;)
+                 .option(&quot;checkpointLocation&quot;, f&quot;{checkpoint_path}/deletes&quot;)
+                 .trigger(availableNow=True)
+                 .start())
+
+query.awaitTermination()</pre>
+
+<p>Der Clou an diesem Muster: Die <code>mrn</code>-Spalte (natürlicher Schlüssel bzw. Pseudonym) verbindet die Löschanfrage über den CDF-Stream mit beliebig vielen nachgelagerten Tabellen &ndash; das Prinzip lässt sich problemlos auf zusätzliche Ziel-Tabellen ausweiten, indem die <code>process_deletes</code>-Funktion um weitere <code>MERGE INTO</code>-Statements ergänzt wird. Delta Lake erlaubt zudem, jedem Commit eine frei wählbare <strong>Commit-Message</strong> mitzugeben (z. B. über die Option <code>userMetadata</code> beim Schreiben), was den gesamten Löschvorgang zusätzlich in der Tabellenhistorie auditierbar macht.</p>
+
+<p>Ein wichtiger Vorbehalt: Nach diesem Vorgang ist die Löschung zwar in der aktuellen Tabellenversion vollzogen, ältere Versionen der Tabelle (Time Travel) und die CDF-Historie enthalten die gelöschten Zeilen aber weiterhin. Wie diese Daten auch physisch entfernt werden, behandelt Kapitel 05-5 zu <code>VACUUM</code>.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> <code>table_changes</code> gibt alle Spalten der Ausgangstabelle zurück, ergänzt um die Commit-Version und den Commit-Zeitstempel der jeweiligen Änderung. Neben dem hier gezeigten Compliance-Anwendungsfall wird die Funktion offiziell auch für inkrementelle ETL-Pipelines empfohlen, die nur seit dem letzten Lauf geänderte Zeilen weiterverarbeiten sollen, für Audit-Trails zur Nachverfolgung von Datenänderungen sowie für Datenreplikations-Workloads, die Änderungen an nachgelagerte Systeme, Caches oder externe Ziele synchronisieren.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/sql/language-manual/functions/table_changes">table_changes table-valued function &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,47 @@
+######################################
+# THE JOB CONFIGURATION              #
+######################################
+# NOTE: Notebook path must be with respect to where the YAML file is located
+
+# Example: This YAML file is located in /Workspace/Shared/databricks-devops-for-pipeline-source/Source/Databricks Devops for Pipelines/resrouces/job/ and Run Unit Tests is located in  /Workspace/Shared/databricks-devops-for-pipeline-source/Source/Databricks Devops for Pipelines/. In this case, notebook_path would be ../../Run Unit Tests.ipynb. 
+
+resources:
+  jobs:
+    health_etl_workflow:    # <----- Name of job to run
+      name: health_etl_workflow_${bundle.target}  # <---- Job name
+      description: Final Workflow SDK
+      email_notifications:
+        on_failure:
+          - ${var.my_email}
+      tasks:
+        - task_key: Unit_Tests
+          notebook_task:
+            notebook_path: ../../run_unit_tests.ipynb #<----- This is relative to the path where the dabs_workflow.job.yml file is located
+            # notebook_path: ../src/test.ipynb
+            source: WORKSPACE
+          description: Execute unit tests for project.
+        - task_key: Visualization
+          depends_on:
+            - task_key: Health_ETL
+          notebook_task:
+            notebook_path: ../../src/Final Visualization.ipynb #<----- This is relative to the path where the databricks.yml file is located
+            base_parameters:
+              catalog_name: ${var.target_catalog}
+            source: WORKSPACE
+          description: Final visualization for project.
+        - task_key: Health_ETL
+          depends_on:
+            - task_key: Unit_Tests
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.health_etl_pipeline.id}
+            full_refresh: true
+          description: Spark Declarative Pipeline
+      
+      ####################################################
+      # Dynamic Job Parameters Based on Our Variables    #
+      ####################################################
+      parameters:
+        - name: target
+          default: ${bundle.target}
+        - name: catalog_name
+          default: ${var.target_catalog}

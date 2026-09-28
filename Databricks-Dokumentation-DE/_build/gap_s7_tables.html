@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Managed vs. External Tables: Erstellen, Ändern, Löschen, Konvertieren</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Managed vs. External Tables: Erstellen, Ändern, Löschen, Konvertieren</h1>
+<p class="subtitle">Section 7 &middot; Governance and Security &middot; Quelle: Databricks-Dokumentation (Unity Catalog Tables)</p>
+
+<p>Ein früheres Kapitel dieser Section hat den konzeptionellen Unterschied zwischen Managed und External Tables bereits eingeführt. Für die Prüfung ist zusätzlich das praktische Handwerkszeug wichtig: die konkreten SQL-Befehle, um beide Tabellentypen anzulegen, zu ändern, zu löschen und ineinander umzuwandeln.</p>
+
+<h2>1. Managed Tables anlegen, ändern, löschen</h2>
+<p>Wird beim Anlegen einer Tabelle kein <code>LOCATION</code> angegeben, entsteht automatisch eine <strong>Managed Table</strong>: Unity Catalog verwaltet sowohl die Metadaten als auch den zugrunde liegenden Speicherort innerhalb des von Databricks verwalteten Cloud-Speichers.</p>
+<pre class="code sql">-- Managed Table anlegen (kein LOCATION angegeben)
+CREATE TABLE main.sales.orders (
+  order_id BIGINT,
+  customer_id BIGINT,
+  order_date DATE,
+  amount DOUBLE
+);
+
+-- Ändern: Spalte hinzufügen bzw. umbenennen
+ALTER TABLE main.sales.orders ADD COLUMN currency STRING;
+ALTER TABLE main.sales.orders RENAME COLUMN amount TO order_amount;
+
+-- Löschen: entfernt Metadaten UND die zugrunde liegenden Daten
+DROP TABLE main.sales.orders;</pre>
+
+<h2>2. External Tables anlegen, ändern, löschen</h2>
+<p>Eine <strong>External Table</strong> entsteht, sobald beim Anlegen ein expliziter <code>LOCATION</code>-Pfad in einem extern registrierten Storage-Bereich (Unity-Catalog-<em>External Location</em>) angegeben wird. Unity Catalog verwaltet dann nur die Metadaten &ndash; die Daten selbst bleiben unter der vollen Kontrolle des zugrunde liegenden Cloud-Speichers.</p>
+<pre class="code sql">-- External Table anlegen (mit explizitem LOCATION)
+CREATE TABLE main.sales.orders_ext (
+  order_id BIGINT,
+  customer_id BIGINT,
+  order_date DATE,
+  amount DOUBLE
+)
+LOCATION &#x27;s3://my-company-data/sales/orders_ext/&#x27;;
+
+-- Löschen: entfernt NUR die Metadaten, die Daten unter dem LOCATION-Pfad bleiben erhalten
+DROP TABLE main.sales.orders_ext;</pre>
+<p>Genau dieser Unterschied beim <code>DROP TABLE</code>-Verhalten ist einer der am häufigsten geprüften Punkte: Bei Managed Tables verschwinden mit dem <code>DROP</code> auch die Daten unwiderruflich, bei External Tables bleiben sie bestehen und könnten &ndash; sofern noch bekannt &ndash; erneut über <code>CREATE TABLE ... LOCATION</code> eingebunden werden.</p>
+
+<h2>3. Zwischen Managed und External konvertieren</h2>
+<p>Seit neueren Databricks-Runtime-Versionen lässt sich eine bestehende External Table direkt in eine Managed Table umwandeln, ohne die Daten manuell kopieren zu müssen:</p>
+<pre class="code sql">-- External Table nachträglich in eine Managed Table umwandeln
+ALTER TABLE main.sales.orders_ext SET MANAGED;</pre>
+<p>Dabei bleiben Tabellenname, Berechtigungen, abhängige Views und die vollständige Tabellenhistorie (Time Travel) erhalten &ndash; die Konvertierung ist zudem so konzipiert, dass sie parallel zu laufenden Lese-/Schreibzugriffen mit minimaler Unterbrechung durchgeführt werden kann. Eine Rückkonvertierung von Managed zu External ist bewusst nicht als einfacher Befehl vorgesehen, da damit die Verantwortung für die physische Datenverwaltung wieder aus Unity Catalog herausgegeben würde.</p>
+
+<h2>4. Entscheidungshilfe</h2>
+<table>
+<tr><th>Kriterium</th><th>Managed Table</th><th>External Table</th></tr>
+<tr><td>Wer verwaltet die Daten?</td><td>Databricks/Unity Catalog</td><td>Bestehender Cloud-Speicher, außerhalb von Databricks kontrolliert</td></tr>
+<tr><td>Verhalten bei <code>DROP TABLE</code></td><td>Daten werden mitgelöscht</td><td>Nur Metadaten werden entfernt</td></tr>
+<tr><td>Empfohlen für</td><td>Neue Tabellen (Standard- und Empfehlungsfall)</td><td>Bestehende Daten, die auch von Systemen außerhalb Databricks gelesen werden</td></tr>
+<tr><td>Unterstützte Formate</td><td>Delta Lake, Apache Iceberg</td><td>Delta, CSV, JSON, Avro, Parquet, ORC, Text</td></tr>
+</table>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Managed Tables gelten laut Databricks als Standard- und empfohlener Tabellentyp für Delta Lake und Apache Iceberg, da Unity Catalog dabei sämtliche Lese-, Schreib-, Speicher- und Optimierungsverantwortung übernimmt (inkl. automatischem <code>OPTIMIZE</code>/<code>VACUUM</code> über Predictive Optimization, siehe Section 6). Die Konvertierung per <code>ALTER TABLE ... SET MANAGED</code> unterstützt außerdem ein Rollback: Eine bereits konvertierte Managed Table kann bei Bedarf wieder in eine External Table zurückversetzt werden.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/tables/convert-to-managed">Convert external or foreign Delta Lake tables to Unity Catalog managed tables &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

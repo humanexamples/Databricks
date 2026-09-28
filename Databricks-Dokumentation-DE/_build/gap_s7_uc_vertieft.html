@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Unity Catalog vertieft: Architektur, Identitäten und vollständiges Rechtemodell</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Unity Catalog vertieft: Architektur, Identitäten und vollständiges Rechtemodell</h1>
+<p class="subtitle">Section 7 &middot; Governance and Security &middot; Quelle: Udemy-Kursmaterial &bdquo;Unity Catalog&ldquo; &amp; &bdquo;Data object privileges&ldquo;, erg&auml;nzt mit Databricks-Dokumentation</p>
+
+<p>Kapitel 1 dieser Section hat das Unity-Catalog-Sicherheitsmodell (ACLs, Tagging, Lineage, System-Tables) vorgestellt, Kapitel 7 die Befehle <code>GRANT</code>/<code>REVOKE</code>/<code>DENY</code> vertieft. Dieses Kapitel ergänzt drei bislang fehlende Bausteine: die <strong>Architektur</strong>-Perspektive (warum Unity Catalog eingeführt wurde), das <strong>Identitätsmodell</strong> (Users, Service Principals, Groups, Identity Federation), sowie das <strong>vollständige Rechtemodell</strong> im Vergleich zum älteren, Hive-Metastore-basierten Berechtigungssystem.</p>
+
+<h2>1. Architektur: Governance vor und nach Unity Catalog</h2>
+<p>Vor Unity Catalog verwaltete jeder Databricks-Workspace seine Nutzerverwaltung, seinen Hive Metastore und seine Zugriffskontrollen vollständig <strong>unabhängig</strong> &ndash; Rechte mussten in jedem Workspace einzeln gepflegt werden, auch wenn dieselben Personen und dieselben Daten betroffen waren. Unity Catalog verlagert Nutzerverwaltung, Metastores und Zugriffskontrollen auf die <strong>Account-Ebene</strong> (verwaltet über die Account Console) und macht sie dadurch workspace-übergreifend wiederverwendbar: Ein einziger Unity-Catalog-Metastore lässt sich mehreren Workspaces gleichzeitig zuweisen, sodass diese sich Zugriffskontrollen und Datenzugriff teilen, statt sie zu duplizieren.</p>
+
+<figure class="img">
+<img src="assets/s7/uc_architecture_before_after.png">
+<figcaption>Vor Unity Catalog verwaltete jeder Workspace Nutzer, Metastore und Zugriffskontrollen unabhängig; Unity Catalog zentralisiert alle drei auf Account-Ebene und teilt sie über Workspaces hinweg.</figcaption>
+</figure>
+
+<h2>2. Identitäten: Users, Service Principals, Groups</h2>
+<p>Unity Catalog unterscheidet drei Arten von Prinzipalen (siehe auch die <code>GRANT</code>-Beispiele in Kapitel 7):</p>
+<ul>
+<li><strong>User</strong> &ndash; eine natürliche Person, eindeutig identifiziert über ihre E-Mail-Adresse. Ein User kann zusätzlich die Rolle <strong>Account Administrator</strong> erhalten, um Metastores zu verwalten und Workspaces zuzuweisen.</li>
+<li><strong>Service Principal</strong> &ndash; eine Identität für automatisierte Tools und Anwendungen (z. B. eine CI/CD-Pipeline), eindeutig identifiziert über eine Application ID statt einer E-Mail-Adresse. Auch Service Principals können administrative Rechte erhalten, um programmatisch Verwaltungsaufgaben auszuführen.</li>
+<li><strong>Group</strong> &ndash; fasst Users und Service Principals zu einer Einheit zusammen und kann selbst weitere Gruppen enthalten (verschachtelte Gruppen, z. B. eine übergeordnete Gruppe &bdquo;employees&ldquo; mit den Untergruppen &bdquo;HR&ldquo; und &bdquo;Finance&ldquo;).</li>
+</ul>
+<p>Identitäten existieren dabei auf zwei Ebenen: auf <strong>Account-Ebene</strong> (zentral in der Account Console verwaltet) und auf <strong>Workspace-Ebene</strong>. <strong>Identity Federation</strong> erlaubt es, eine Identität einmalig auf Account-Ebene anzulegen und sie anschließend beliebigen Workspaces zuzuweisen &ndash; ohne dass in jedem Workspace eine eigene Kopie derselben Identität manuell gepflegt werden müsste.</p>
+
+<figure class="img">
+<img src="assets/s7/uc_identity_federation.png">
+<figcaption>Identity Federation: Eine einmal auf Account-Ebene angelegte Identität lässt sich mehreren Workspaces zuweisen, ohne sie dort erneut anzulegen.</figcaption>
+</figure>
+
+<h2>3. Weitere Securable Objects: Storage Credential, External Location, Share, Recipient</h2>
+<p>Neben der bereits bekannten Objekthierarchie (Metastore &rarr; Catalog &rarr; Schema &rarr; Table/View/Function) verwaltet Unity Catalog zwei weitere Objektkategorien: <strong>Storage Credentials</strong> kapseln die Authentifizierung gegenüber dem zugrunde liegenden Cloud-Speicher und gelten für einen gesamten Speicher-Container; <strong>External Locations</strong> referenzieren darauf aufbauend ein konkretes Verzeichnis innerhalb dieses Containers. Für Delta Sharing kommen zusätzlich <strong>Shares</strong> (eine Sammlung von Tabellen, die mit einem oder mehreren <strong>Recipients</strong> geteilt wird) hinzu.</p>
+
+<h2>4. Das vollständige Privilegien-Modell</h2>
+<p>Kapitel 7 hat <code>GRANT</code>/<code>REVOKE</code>/<code>DENY</code> anhand einzelner Beispiele (<code>SELECT</code>, <code>USE SCHEMA</code>, <code>ALL PRIVILEGES</code>) gezeigt. Die vollständige Liste der in Unity Catalog verfügbaren Privilegien:</p>
+<table>
+<tr><th>Privileg</th><th>Bedeutung</th></tr>
+<tr><td><code>CREATE</code></td><td>Ein neues Objekt anlegen (z. B. eine Tabelle in einem Schema)</td></tr>
+<tr><td><code>SELECT</code></td><td>Lesezugriff auf ein Objekt</td></tr>
+<tr><td><code>MODIFY</code></td><td>Daten in einem Objekt hinzufügen, ändern oder löschen</td></tr>
+<tr><td><code>READ FILES</code></td><td>Zugriff auf die zugrunde liegenden Dateien eines Storage-Objekts (Volume, External Location)</td></tr>
+<tr><td><code>WRITE FILES</code></td><td>Schreibzugriff auf die zugrunde liegenden Dateien eines Storage-Objekts</td></tr>
+<tr><td><code>EXECUTE</code></td><td>Eine benutzerdefinierte Funktion (Function) ausführen</td></tr>
+<tr><td><code>USE CATALOG</code> / <code>USE SCHEMA</code></td><td>Voraussetzung, um überhaupt auf Objekte innerhalb des Catalogs bzw. Schemas zugreifen zu können (siehe Kapitel 7)</td></tr>
+</table>
+
+<figure class="img">
+<img src="assets/s7/uc_security_model_overview.png">
+<figcaption>Das Sicherheitsmodell von Unity Catalog verbindet drei Bausteine: Prinzipale (wer), Securable Objects (was) und Privilegien (wie) &ndash; vergeben über GRANT Privilege ON Securable_Object TO Principal.</figcaption>
+</figure>
+
+<h2>5. Legacy: weiterhin Zugriff auf den Hive Metastore</h2>
+<p>Unity Catalog ist <strong>additiv</strong>: Der bisherige, workspace-lokale Hive Metastore bleibt nach Aktivierung von Unity Catalog vollständig zugänglich &ndash; unabhängig davon, welcher Unity-Catalog-Metastore dem Workspace zugewiesen ist, stellt der feste Catalog-Name <code>hive_metastore</code> weiterhin Zugriff auf die dort verwalteten Datenbanken und Tabellen bereit. Eine harte, erzwungene Migration ist damit nicht nötig &ndash; bestehende Hive-Metastore-Objekte und neue Unity-Catalog-Kataloge (z. B. <code>dev</code>, <code>prod</code>) lassen sich parallel referenzieren.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Vor Unity Catalog nutzte Databricks für Governance ein älteres, Hive-Metastore-basiertes <strong>Table-ACL-Modell</strong> mit einem eigenen, leicht abweichenden Satz an Privilegien: <code>SELECT</code>, <code>MODIFY</code>, <code>CREATE</code>, <code>READ_METADATA</code> (Metadaten eines Objekts einsehen), <code>USAGE</code> (ohne inhaltliche Wirkung, aber Voraussetzung für jede Aktion auf einem Datenbankobjekt) und <code>ALL PRIVILEGES</code>, vergeben ebenfalls über <code>GRANT ... ON ... TO ...</code> auf die Objekttypen <code>CATALOG</code>, <code>SCHEMA</code>, <code>TABLE</code>, <code>VIEW</code>, <code>FUNCTION</code> sowie <code>ANY FILE</code> für Zugriff auf das zugrunde liegende Dateisystem. Wer Rechte vergeben durfte, richtete sich nach der Objekt-Eigentümerschaft (Databricks-Administrator: alle Objekte im Catalog und Dateisystem; Catalog-Owner: alle Objekte im Catalog; Database-Owner: alle Objekte in der Datenbank; Table-Owner: nur die eigene Tabelle). Unity Catalog übernimmt das Grundprinzip (<code>GRANT</code>/<code>REVOKE</code>, Owner-basierte Rechtevergabe), ersetzt aber <code>ANY FILE</code> durch die feingranularen <code>READ FILES</code>/<code>WRITE FILES</code>-Privilegien auf Volumes bzw. External Locations und führt zusätzlich <code>USE CATALOG</code> als neue, durch die dritte Namensebene (Catalog) nötig gewordene Voraussetzung ein &ndash; <code>USAGE</code> und <code>READ_METADATA</code> entfallen dagegen als eigenständige Privilegien.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/data-governance/unity-catalog/">What is Unity Catalog? &ndash; Databricks-Dokumentation</a> &middot; <a href="https://docs.databricks.com/aws/en/admin/users-groups/">Manage users and groups &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Delta Lake: Transaktionsprotokoll und ACID-Garantien</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Delta Lake: Transaktionsprotokoll und ACID-Garantien</h1>
+<p class="subtitle">Section 1 &middot; Databricks Intelligence Plattform &middot; Quelle: Udemy-Kursmaterial &bdquo;Delta Lake&ldquo;, erg&auml;nzt mit Databricks-Dokumentation</p>
+
+<p>Das vorangegangene Kapitel dieser Section hat Delta Lake bereits als Speicherschicht der Databricks-Plattform eingeführt. Dieses Kapitel öffnet die Motorhaube und erklärt den zentralen Mechanismus, der Delta Lake seine Zuverlässigkeit verleiht: das <strong>Transaktionsprotokoll</strong> (Delta Log).</p>
+
+<h2>1. Delta Lake: Was es ist &ndash; und was nicht</h2>
+<p>Delta Lake ist ein <strong>quelloffenes Speicher-Framework</strong>, keine proprietäre Technologie. Es ist eine <strong>Speicherschicht</strong>, kein eigenes Dateiformat und kein Speichermedium &ndash; darunter liegen weiterhin gewöhnliche Parquet-Dateien. Und es ist auch kein Data Warehouse oder Datenbankdienst, sondern das Fundament, auf dem sich eine <strong>Lakehouse-Architektur</strong> erst aufbauen lässt. Technisch ist Delta Lake eine Komponente, die als Teil des Databricks Runtime auf dem Cluster läuft: Erstellt man eine Delta-Tabelle, landen die eigentlichen Daten als eine oder mehrere Parquet-Dateien im Speicher &ndash; zusätzlich schreibt Delta Lake aber ein Transaktionsprotokoll mit.</p>
+
+<figure class="img">
+<img src="assets/s1/delta_lake_architecture.png">
+<figcaption>Delta Lake läuft als Komponente des Databricks Runtime auf dem Cluster; im Speicher liegen sowohl die Datendateien als auch das Transaktionsprotokoll.</figcaption>
+</figure>
+
+<h2>2. Das Transaktionsprotokoll: Single Source of Truth</h2>
+<p>Der <strong>Delta Log</strong> ist eine geordnete Aufzeichnung jeder einzelnen Transaktion, die jemals auf einer Tabelle ausgeführt wurde &ndash; abgelegt als fortlaufend nummerierte JSON-Dateien im Unterordner <code>_delta_log</code>. Jede committete Transaktion hält fest: welche Operation ausgeführt wurde (z. B. Insert oder Update), welche Bedingungen/Filter dabei galten, und welche Datendateien dadurch hinzugekommen oder entfernt wurden. Jede Leseanfrage an eine Delta-Tabelle prüft zuerst dieses Protokoll, um die aktuell gültige Version der Daten zu ermitteln &ndash; die Datendateien selbst werden nie direkt und ungeprüft gelesen.</p>
+
+<h2>3. Wie Schreib- und Lesevorgänge zusammenspielen</h2>
+<p>Vier Szenarien zeigen, warum dieser Mechanismus so robust ist:</p>
+<ul>
+<li><strong>Normaler Schreib-/Lesevorgang:</strong> Ein Schreibprozess legt Datendateien an und trägt anschließend einen neuen Log-Eintrag ein. Ein Leseprozess liest zuerst den Log und weiß dadurch genau, welche Dateien zur aktuellen Tabellenversion gehören.</li>
+<li><strong>Update (Copy-on-Write):</strong> Delta Lake ändert eine bestehende Datei nie direkt. Stattdessen wird eine Kopie mit den aktualisierten Werten als neue Datei angelegt, und der neue Log-Eintrag vermerkt, dass die alte Datei nicht mehr Teil der aktuellen Version ist &ndash; sie wird nicht sofort gelöscht, sondern bleibt bis zu einem späteren <code>VACUUM</code> (siehe nächstes Kapitel) physisch bestehen.</li>
+<li><strong>Gleichzeitige Schreib- und Lesevorgänge:</strong> Solange ein Schreibvorgang noch nicht committet (also noch kein neuer Log-Eintrag existiert), sieht ein parallel laufender Lesevorgang ausschließlich den zuletzt vollständig committeten Stand &ndash; nie einen unvollständigen Zwischenzustand.</li>
+<li><strong>Fehlgeschlagene Schreibvorgänge:</strong> Bricht ein Schreibvorgang mit einem Fehler ab, wird schlicht kein neuer Log-Eintrag geschrieben. Eine dabei bereits teilweise geschriebene, unvollständige Datei bleibt zwar im Speicher liegen, wird aber von keinem Log-Eintrag referenziert und daher von keinem Leseprozess jemals gelesen.</li>
+</ul>
+
+<figure class="img">
+<img src="assets/s1/delta_lake_updates.png">
+<figcaption>Ein Update kopiert die betroffene Datei statt sie zu überschreiben (Copy-on-Write) und aktualisiert erst danach das Transaktionsprotokoll.</figcaption>
+</figure>
+
+<h2>4. Die Vorteile im Überblick</h2>
+<ul>
+<li><strong>ACID-Transaktionen</strong> auch auf reinem Objektspeicher (S3, ADLS, GCS), der von sich aus keine Transaktionsgarantien bietet.</li>
+<li><strong>Skalierbare Metadatenverwaltung</strong> &ndash; auch bei Tabellen mit Milliarden Zeilen und Zehntausenden Dateien bleibt das Protokoll effizient abfragbar.</li>
+<li><strong>Vollständiger Audit-Trail</strong> aller Änderungen, da jede Transaktion protokolliert wird (Basis für Time Travel, siehe nächstes Kapitel).</li>
+<li>Aufbau auf <strong>offenen Standardformaten</strong> &ndash; Parquet für Daten, JSON für das Protokoll &ndash; statt auf einem proprietären Binärformat.</li>
+</ul>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Um das wiederholte Auflisten aller JSON-Dateien bei sehr langer Historie zu vermeiden, schreibt Delta Lake automatisch alle 10 Commits eine binäre <strong>Checkpoint-Datei</strong> (Parquet-Format), die den kompletten Tabellenzustand zu diesem Zeitpunkt zusammenfasst &ndash; ein Leseprozess muss dann nur noch den letzten Checkpoint plus die seither hinzugekommenen JSON-Dateien auswerten, statt das gesamte Protokoll von Anfang an durchzugehen.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/delta/history">Work with Delta Lake table history &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>PII-Schutz: Pseudonymisierung & Anonymisierung</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>PII-Schutz: Pseudonymisierung & Anonymisierung</h1>
+<p class="subtitle">Section 7 &middot; Governance and Security &middot; Quelle: Kurs 6, DP 1.2</p>
+
+<p>Bevor personenbezogene Daten (PII) analysiert, für Machine Learning genutzt oder an nachgelagerte Teams weitergegeben werden, sollten sie entweder <strong>pseudonymisiert</strong> oder <strong>anonymisiert</strong> werden. Wichtig vorab: Mit ausreichend Zeit und Zusatzdaten lässt sich praktisch jeder Datensatz re-identifizieren &ndash; beide Techniken reduzieren also das Risiko, beseitigen es aber nicht vollständig. Der grundlegende Unterschied liegt darin, <em>was</em> geschützt wird und <em>ob</em> der Vorgang umkehrbar ist.</p>
+
+<figure class="img">
+<img src="assets/05/pseudo-vs-anonym.png">
+<figcaption>Pseudonymisierung schützt einzelne Datensätze und bleibt reversibel; Anonymisierung schützt den gesamten Datensatz und ist irreversibel.</figcaption>
+</figure>
+
+<h2>1. Pseudonymisierung: reversibel, auf Record-Ebene</h2>
+<p>Bei der Pseudonymisierung wird ein personenbezogenes Merkmal (z. B. eine <code>user_id</code>) durch einen künstlichen Bezeichner ersetzt. Der Clou: Über eine gesicherte Zuordnungstabelle oder eine deterministische Funktion lässt sich der Original-Wert bei Bedarf wiederherstellen. Rechtlich wichtig: <strong>Pseudonymisierte Daten gelten nach DSGVO weiterhin als personenbezogene Daten</strong> &ndash; die Pseudonymisierung ersetzt keine Löschpflicht, sie schützt lediglich vor unautorisiertem Zugriff auf den Klartext. Zwei Verfahren kommen zum Einsatz: Hashing und Tokenisierung.</p>
+
+<h3>1.1 Hashing mit Salt</h3>
+<p>Eine Hash-Funktion erzeugt aus einem Eingabewert eine Zeichenkette fester Länge. Da Hash-Funktionen deterministisch sind, könnte derselbe Eingabewert (z. B. eine bekannte User-ID) durch simples Ausprobieren zurückgerechnet werden. Um das zu erschweren, wird vor dem Hashing ein zufälliger, geheimer Wert &ndash; das <strong>Salt</strong> &ndash; angehängt. In produktiven Pipelines sollte dieses Salt nicht im Klartext im Code stehen, sondern über die <strong>Databricks Secrets API</strong> (<code>dbutils.secrets.get(...)</code>) verwaltet werden, sodass nur berechtigte Jobs und Nutzer darauf zugreifen können. Das folgende Beispiel stammt aus der echten Pipeline <code>DP 1.2.1 - Pseudonymized PII Lookup Table</code>:</p>
+
+<pre class="code python">from pyspark import pipelines as dp
+import pyspark.sql.functions as F
+
+# In dieser Demo als Klartext-Variable; produktiv ueber
+# dbutils.secrets.get(scope=&quot;pii&quot;, key=&quot;hash_salt&quot;) aus einem Secret Scope laden
+salt = &quot;BEANS&quot;
+
+# Funktion zum Pseudonymisieren per Salted Hashing
+def salted_hash(id):
+    return F.sha2(F.concat(id, F.lit(salt)), 256)
+
+# Pseudonymisierte Lookup-Tabelle: alt_id ersetzt user_id in allen Downstream-Tabellen
+@dp.table
+def user_lookup_hashed():
+    return (dp
+            .read_stream(&quot;registered_users&quot;)
+            .select(
+                  salted_hash(F.col(&quot;user_id&quot;)).alias(&quot;alt_id&quot;),
+                  &quot;device_id&quot;, &quot;mac_address&quot;, &quot;user_id&quot;)
+           )</pre>
+
+<p>Nur die schmale <code>user_lookup_hashed</code>-Tabelle enthält später noch die Verbindung zwischen <code>alt_id</code> und der echten <code>user_id</code>; alle anderen Pipelines arbeiten ausschließlich mit der pseudonymisierten <code>alt_id</code>. Wird der Zugriff auf diese eine Lookup-Tabelle konsequent eingeschränkt, lässt sich die Re-Identifikation im gesamten übrigen System wirksam verhindern.</p>
+
+<h3>1.2 Tokenisierung</h3>
+<p>Bei der Tokenisierung wird jedem eindeutigen Wert ein zufälliges Token (meist eine UUID) zugewiesen und die Zuordnung in einem separaten, gesicherten <strong>Token-Vault</strong> gespeichert. Tokenisierung ist beim Schreiben langsamer als Hashing, da ein Join gegen die Vault-Tabelle nötig ist &ndash; beim Lesen dafür effizient, da nur der Token weitergereicht wird.</p>
+
+<pre class="code python"># Vault-Tabelle: pro eindeutigem user_id ein zufaelliges Token
+@dp.table
+def registered_users_tokens():
+    return (dp
+            .readStream(&quot;registered_users&quot;)
+            .select(&quot;user_id&quot;)
+            .distinct()
+            .withColumn(&quot;token&quot;, F.expr(&quot;uuid()&quot;))
+        )
+
+# Pseudonymisierte Lookup-Tabelle: user_id wird durch Token (alt_id) ersetzt
+@dp.table
+def user_lookup_tokenized():
+    return (dp
+            .read_stream(&quot;registered_users&quot;)
+            .join(dp.read(&quot;registered_users_tokens&quot;), &quot;user_id&quot;, &quot;left&quot;)
+            .drop(&quot;user_id&quot;)
+            .withColumnRenamed(&quot;token&quot;, &quot;alt_id&quot;)
+           )</pre>
+
+<h2>2. Anonymisierung: irreversibel, auf Datensatz-Ebene</h2>
+<p>Anonymisierung verändert personenbezogene Daten so, dass eine Person <strong>weder direkt noch indirekt</strong> identifiziert werden kann &ndash; und das absichtlich unumkehrbar. Anders als Pseudonymisierung schützt sie meist den gesamten Datensatz statt einzelner Datensätze und eignet sich besonders für Business-Intelligence-Anwendungsfälle, bei denen Trends und Aggregationen wichtiger sind als Einzelwerte. In der Praxis kombiniert man meist mehrere Techniken.</p>
+
+<h3>2.1 Suppression (Unterdrückung)</h3>
+<p>Bedingte Filter und dynamische Zugriffskontrollen (siehe Kapitel 05-2 zu Row Filters/Dynamic Views) entfernen ganze Spalten oder Zeilen aus dem Ergebnis, ohne die Auswertungsfähigkeit für Aggregationen einzuschränken. Auch Gruppen mit sehr niedriger Datensatzanzahl (z. B. "nur ein Kunde in dieser Postleitzahl") sollten gefiltert werden, da solche Kleinstgruppen re-identifizierbar sind.</p>
+
+<h3>2.2 Generalisierung (Binning, Kategorisierung, Kürzung, Rundung)</h3>
+<p>Generalisierung nimmt Daten gezielt Präzision, ohne sie ganz zu entfernen: Städte werden zu Bundesländern zusammengefasst (kategoriale Generalisierung), exakte Werte werden in Bänder/Bins gruppiert, IP-Adressen werden auf ein <code>/24</code>-Subnetz gekürzt (letztes Byte auf 0 gesetzt), und Zahlen werden gerundet. Das folgende Beispiel aus der Pipeline <code>DP 1.2.2 - Anonymized Users Age</code> zeigt <strong>Binning</strong>: Statt eines exakten Geburtsdatums wird nur noch eine Altersspanne gespeichert.</p>
+
+<pre class="code python">def age_bins(dob_col):
+    age_col = F.floor(F.months_between(F.current_date(), dob_col) / 12).alias(&quot;age&quot;)
+    return (
+        F.when((age_col &lt; 18), &quot;under 18&quot;)
+        .when((age_col &gt;= 18) &amp; (age_col &lt; 25), &quot;18-25&quot;)
+        .when((age_col &gt;= 25) &amp; (age_col &lt; 35), &quot;25-35&quot;)
+        .when((age_col &gt;= 35) &amp; (age_col &lt; 45), &quot;35-45&quot;)
+        .when((age_col &gt;= 45) &amp; (age_col &lt; 55), &quot;45-55&quot;)
+        .when((age_col &gt;= 55) &amp; (age_col &lt; 65), &quot;55-65&quot;)
+        .when((age_col &gt;= 65) &amp; (age_col &lt; 75), &quot;65-75&quot;)
+        .when((age_col &gt;= 75) &amp; (age_col &lt; 85), &quot;75-85&quot;)
+        .when((age_col &gt;= 85) &amp; (age_col &lt; 95), &quot;85-95&quot;)
+        .when((age_col &gt;= 95), &quot;95+&quot;)
+        .otherwise(&quot;invalid age&quot;)
+        .alias(&quot;age&quot;)
+    )
+
+@dp.table
+def user_age_bins():
+    return (
+        dp.read(&quot;users_bronze&quot;)
+        .select(&quot;user_id&quot;, age_bins(F.col(&quot;dob&quot;)), &quot;gender&quot;, &quot;city&quot;, &quot;state&quot;)
+    )</pre>
+
+<p>Aus dem exakten Geburtsdatum &ndash; einem eindeutigen, hoch identifizierenden Merkmal &ndash; wird so eine von zehn groben Alterskategorien. Auswertungen wie "Wie verteilen sich Nutzer über Altersgruppen?" bleiben möglich, eine Re-Identifikation einzelner Personen über das Geburtsdatum ist jedoch ausgeschlossen.</p>
+
+<h2>3. Welche Technik wann?</h2>
+<table>
+<tr><th>Technik</th><th>Schutzgrad</th><th>Reversibel?</th><th>Typischer Einsatzzweck</th></tr>
+<tr><td>Data Masking</td><td>Niedrig&ndash;Mittel</td><td>Teilweise</td><td>Operative Nutzbarkeit bei reduziertem Risiko erhalten</td></tr>
+<tr><td>Pseudonymisierung (allgemein)</td><td>Niedrig&ndash;Mittel</td><td>Ja</td><td>Längsschnittstudien, bei denen Personen wiedererkennbar bleiben müssen</td></tr>
+<tr><td>Hashing (mit Salt)</td><td>Mittel&ndash;Hoch</td><td>Praktisch nein (ohne Salt)</td><td>Sichere, verknüpfbare Kennungen, z. B. Passwort-Speicherung</td></tr>
+<tr><td>Column Encryption</td><td>Hoch</td><td>Ja (mit Schlüssel)</td><td>Besonders sensible Einzelspalten</td></tr>
+<tr><td>Tokenisierung</td><td>Hoch</td><td>Ja (über Vault)</td><td>Zahlungsdaten, Kreditkartentransaktionen</td></tr>
+</table>
+
+<p>Als Faustregel gilt: <strong>keine PII zu speichern ist immer besser, als PII zu schützen</strong>. Wo PII unvermeidbar ist, gilt die Rangfolge <em>Anonymisierung &gt; Pseudonymisierung &gt; Klartext</em>. Zusätzlich lohnt es sich, immer zu bedenken, wie sich mehrere eigentlich harmlose Datensätze kombinieren lassen, um eine Person doch wieder zu identifizieren &ndash; und PII-verarbeitende Umgebungen konsequent von anderen Workloads zu isolieren.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation und Praxisquellen:</strong> Für Salt- und Verschlüsselungsschlüssel empfiehlt sich statt eines klassischen Databricks Secret Scope zunehmend die Anbindung eines externen Schlüsselverwaltungsdienstes (z. B. Azure Key Vault) über ein Unity-Catalog-<strong>Service Credential</strong> &ndash; das zentralisiert die Schlüsselverwaltung zusätzlich zur Governance über Unity Catalog und reduziert das Risiko, dass Salts versehentlich mehrfach oder inkonsistent verwaltet werden. Als organisatorische Best Practice wird zudem empfohlen, PII-Spalten systematisch über Schema-Inspektion und automatisiertes Data-Profiling zu identifizieren, statt sich auf manuelle Dokumentation zu verlassen.<br>
+Quelle: <a href="https://medium.com/databricks-platform-sme/best-practices-for-handling-pii-data-6281be8c15ae">Best Practices for handling PII data &ndash; Databricks Platform SME (Medium)</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

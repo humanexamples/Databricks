@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Spark-Architektur und Adaptive Query Execution</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Spark-Architektur und Adaptive Query Execution</h1>
+<p class="subtitle">Section 6 &middot; Troubleshooting, Monitoring and Optimization &middot; Quelle: Kurs 7, Kapitel 1</p>
+
+<p>Um Spark-Anwendungen auf Databricks gezielt zu optimieren, hilft es, zunächst zu verstehen, wie Spark eine Anfrage überhaupt ausführt. Dieses Kapitel erklärt die grundlegende Ausführungshierarchie (Jobs, Stages, Tasks), die Rollen von Driver und Executor im Cluster sowie die <strong>Adaptive Query Execution (AQE)</strong> &ndash; eine der wichtigsten Optimierungstechniken moderner Spark-Versionen, die viele manuelle Tuning-Schritte überflüssig macht.</p>
+
+<h2>1. Wie Spark eine Anwendung ausführt: Jobs, Stages, Tasks</h2>
+<p>Der Grund, warum Spark große Datenmengen so schnell verarbeiten kann, ist <strong>Parallelität</strong>: Eine Berechnung wird in kleine Einheiten zerlegt, die gleichzeitig auf vielen Maschinen laufen. Spark strukturiert diese Parallelität in drei Ebenen:</p>
+<ul>
+<li><strong>Job</strong> &ndash; Jede ausgelöste Aktion (Action, z.&nbsp;B. <code>write</code>, <code>count</code>, <code>display</code>) startet einen Job. Ein Job ist die größte Ausführungseinheit.</li>
+<li><strong>Stage</strong> &ndash; Ein Job wird in eine geordnete Abfolge von Stages zerlegt. Eine neue Stage beginnt immer dann, wenn Daten neu über das Netzwerk verteilt werden müssen (siehe Shuffle, Kapitel 06-4).</li>
+<li><strong>Task</strong> &ndash; Die kleinste Ausführungseinheit. Der Driver erzeugt für jede Datenpartition eine Task, die von einem Executor-Kern abgearbeitet wird.</li>
+</ul>
+
+<h2>2. Die Spark-Architektur: Driver, Worker, Executor, Cores</h2>
+<p>Ein Databricks-Cluster besteht aus virtuellen Maschinen, über die eine Berechnung verteilt wird. Typischerweise gibt es einen <strong>Driver</strong> und mehrere <strong>Worker-Knoten</strong> (Databricks bietet zusätzlich einen Single-Node-Modus für Entwicklung/Tests kleiner Workloads an).</p>
+<ul>
+<li><strong>Driver</strong> &ndash; Die Maschine, auf der die Anwendung läuft. Er hält den Zustand der Spark-Anwendung, reagiert auf das Nutzerprogramm und ist verantwortlich für Analyse, Verteilung und Planung der Arbeit auf die Executor. Pro Cluster gibt es immer nur <em>einen</em> Driver, unabhängig von der Anzahl der Executor.</li>
+<li><strong>Worker-Knoten</strong> &ndash; Hostet den Executor-Prozess mit einer festen Anzahl an Executors.</li>
+<li><strong>Executor</strong> &ndash; Jeder Executor hält einen Teil der zu verarbeitenden Daten &ndash; eine sogenannte <strong>Spark-Partition</strong> (nicht zu verwechseln mit einer Festplattenpartition!). Executor führen die vom Driver zugewiesene Arbeit aus und melden den Berechnungsstatus zurück an den Driver.</li>
+<li><strong>Cores</strong> (auch Slots oder Threads genannt) &ndash; Spark parallelisiert auf zwei Ebenen: zum einen wird die Arbeit auf mehrere Executor verteilt, zum anderen besitzt jeder Executor mehrere Slots, denen jeweils eine Task zugewiesen werden kann.</li>
+</ul>
+
+<figure class="img">
+<img src="assets/06/spark-architecture.png">
+<figcaption>Grundstruktur eines Spark-Clusters: Der Driver verteilt Arbeit an die Executor, die wiederum über mehrere Cores parallel Tasks abarbeiten.</figcaption>
+</figure>
+
+<h2>3. Catalyst-Optimizer: Logischer und physischer Plan</h2>
+<p>Bevor eine DataFrame- oder SQL-Operation tatsächlich ausgeführt wird, durchläuft sie Sparks <strong>Catalyst-Optimizer</strong>. Dieser übersetzt die Abfolge der Transformationen zunächst in einen <em>logischen Plan</em>, wendet Optimierungsregeln und Kostenmodelle an und erzeugt daraus einen <em>physischen Plan</em>, der festlegt, wie die Berechnung konkret als RDD-Transformationen und -Aktionen auf dem Cluster ausgeführt wird. Dieser mehrstufige Optimierungsprozess ist einer der Hauptgründe, warum DataFrame- und SQL-Operationen in aller Regel deutlich performanter sind als handgeschriebene RDD-Transformationen oder Single-Threaded-Python/Pandas-Code, der gar nicht erst von Catalyst optimiert werden kann.</p>
+
+<h2>4. Adaptive Query Execution (AQE)</h2>
+<p>Ein statischer Ausführungsplan hat einen Nachteil: Er basiert auf Schätzungen, die vor der eigentlichen Ausführung getroffen werden und sich als ungenau herausstellen können. <strong>Adaptive Query Execution</strong> (seit Spark&nbsp;3.0 verfügbar, seit Spark&nbsp;3.2 standardmäßig aktiviert) löst dieses Problem, indem Spark den Ausführungsplan <em>während</em> der Laufzeit anhand tatsächlich beobachteter Statistiken neu optimiert. Nach jedem Shuffle- oder Broadcast-Austausch (einer sogenannten Query-Stage) liegen genaue Zahlen vor, auf deren Basis Spark bessere Entscheidungen treffen kann als jede Vorab-Schätzung.</p>
+<p>AQE umfasst im Kern drei Optimierungen:</p>
+<ul>
+<li><strong>Dynamischer Wechsel der Join-Strategie</strong> &ndash; Stellt sich zur Laufzeit heraus, dass eine Tabelle klein genug ist, wechselt Spark automatisch von einem teuren Sort-Merge-Join zu einem günstigeren Broadcast-Hash-Join.</li>
+<li><strong>Dynamisches Zusammenlegen von Shuffle-Partitionen</strong> &ndash; Viele kleine, nach einem Shuffle entstandene Partitionen werden automatisch zu größeren, effizienteren Partitionen zusammengefasst.</li>
+<li><strong>Dynamische Optimierung von Skew-Joins</strong> &ndash; Überproportional große Partitionen (Data Skew) werden automatisch aufgeteilt, sodass die Arbeit gleichmäßiger auf die Cores verteilt wird (siehe Kapitel 06-4).</li>
+</ul>
+
+<h2>5. DataFrame/SQL statt RDD: Praktische Empfehlungen</h2>
+<p>Aus dem Zusammenspiel von Catalyst und AQE ergeben sich klare Code-Empfehlungen für den produktiven Einsatz:</p>
+<ol>
+<li>DataFrames oder Spark SQL statt der niedrigeren RDD-API verwenden &ndash; nur so profitiert der Code vollständig von Catalyst und AQE.</li>
+<li>In Produktions-Jobs unnötige Aktionen vermeiden, die zusätzliche Berechnungen auslösen (z.&nbsp;B. <code>count()</code>, <code>display()</code>, <code>collect()</code>), sofern sie nicht zwingend erforderlich sind.</li>
+<li>Operationen vermeiden, die die gesamte Berechnung auf den Driver zwingen, etwa Single-Threaded-Pandas-Code. Stattdessen die <strong>Pandas API on Spark</strong> nutzen, die pandas-ähnliche Syntax auf verteilte Ausführung über alle Cores abbildet.</li>
+</ol>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> AQE ist heute standardmäßig aktiviert und umfasst neben den drei klassischen Optimierungen (Join-Strategie, Partition-Coalescing, Skew-Handling) inzwischen auch Optimierungen, die früher manuelle Hints erforderten. Seit Databricks Runtime&nbsp;13.1 profitieren im Rahmen von Project Lightspeed auch strukturierte Streaming-Queries mit <code>foreachBatch</code>-Sink von den dynamischen AQE-Neuoptimierungen. Die aktuelle Referenz listet die konkreten Konfigurationsparameter (z.&nbsp;B. Schwellenwerte für Skew-Erkennung) im Detail auf.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/optimizations/aqe">Adaptive query execution &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

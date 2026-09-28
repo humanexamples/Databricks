@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Metadaten-Spalten & die Rescued-Data-Spalte</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Metadaten-Spalten & die Rescued-Data-Spalte</h1>
+<p class="subtitle">Section 2 &middot; Data Ingestion and Loading &middot; Quelle: Kurs 1, Kapitel 6&ndash;9</p>
+
+<p>Beim Laden von Rohdaten in eine Bronze-Tabelle reicht es selten, nur die fachlichen Spalten der Quelle zu übernehmen. Zwei Ergänzungen haben sich in der Praxis als Standard etabliert: <strong>Metadaten-Spalten</strong>, die dokumentieren, woher und wann eine Zeile stammt, und die <strong>Rescued-Data-Spalte</strong>, die verhindert, dass unerwartete oder fehlerhafte Werte beim Laden stillschweigend verloren gehen. Beide Mechanismen lassen sich mit denselben Ingestion-Werkzeugen nutzen, die bereits aus der CTAS-/<code>read_files()</code>-Ingestion bekannt sind.</p>
+
+<h2>1. Metadaten-Spalten beim Ingest ergänzen</h2>
+<p>Jede Datei, die über <code>read_files()</code>, <code>spark.read</code> oder Auto Loader eingelesen wird, besitzt eine versteckte Spalte namens <code>_metadata</code>. Sie steht für alle unterstützten Dateiformate zur Verfügung, muss aber explizit in der Leseabfrage ausgewählt werden. Die wichtigsten Felder sind <code>_metadata.file_name</code> (Name der Quelldatei) und <code>_metadata.file_modification_time</code> (letzter Änderungszeitpunkt der Datei). Ergänzt um <code>current_timestamp()</code> für den Ingestion-Zeitpunkt selbst, lässt sich damit für jede Zeile lückenlos nachvollziehen, aus welcher Datei sie stammt und wann sie geladen wurde &ndash; wichtig für Auditing, Data Lineage und die Fehlersuche, wenn sich später herausstellt, dass eine bestimmte Quelldatei fehlerhafte Daten enthielt.</p>
+
+<figure class="img">
+<img src="assets/01/common-file-metadata-fields.png">
+<figcaption>Die beiden am häufigsten genutzten Felder der versteckten <code>_metadata</code>-Spalte: Dateiname und letzter Änderungszeitpunkt.</figcaption>
+</figure>
+
+<p>In der Praxis werden diese Felder direkt in die CTAS-Abfrage eingebaut, mit der die Bronze-Tabelle erzeugt wird. Das folgende Beispiel liest historische Nutzerdaten aus Parquet-Dateien, wandelt einen Unix-Zeitstempel in ein lesbares Datum um und ergänzt drei Metadaten-Spalten:</p>
+
+<pre class="code sql">DROP TABLE IF EXISTS historical_users_bronze;
+
+CREATE TABLE historical_users_bronze AS
+SELECT
+  *,
+  cast(from_unixtime(user_first_touch_timestamp / 1000000) AS DATE) AS first_touch_date,
+  _metadata.file_modification_time AS file_modification_time,   -- letzte Änderung der Quelldatei
+  _metadata.file_name              AS source_file,               -- Name der Quelldatei
+  current_timestamp()              AS ingestion_time              -- Zeitpunkt des Ladevorgangs
+FROM read_files(
+  &quot;/Volumes/dbacademy_ecommerce/v01/raw/users-historical&quot;,
+  format =&gt; &quot;parquet&quot;
+);
+
+-- Beispiel-Auswertung: Zeilenanzahl je Quelldatei
+SELECT source_file, count(*) AS total
+FROM historical_users_bronze
+GROUP BY source_file
+ORDER BY source_file;</pre>
+
+<p>Dieselbe Logik lässt sich äquivalent in PySpark formulieren, etwa wenn die Ingestion Teil eines größeren Python-Skripts ist:</p>
+
+<pre class="code python">from pyspark.sql.functions import col, from_unixtime, current_timestamp
+from pyspark.sql.types import DateType
+
+df = spark.read.format(&quot;parquet&quot;).load(&quot;/Volumes/dbacademy_ecommerce/v01/raw/users-historical&quot;)
+
+df_with_metadata = (
+    df.withColumn(&quot;first_touch_date&quot;, from_unixtime(col(&quot;user_first_touch_timestamp&quot;) / 1_000_000).cast(DateType()))
+      .withColumn(&quot;file_modification_time&quot;, col(&quot;_metadata.file_modification_time&quot;))
+      .withColumn(&quot;source_file&quot;, col(&quot;_metadata.file_name&quot;))
+      .withColumn(&quot;ingestion_time&quot;, current_timestamp())
+)
+
+df_with_metadata.write.format(&quot;delta&quot;).mode(&quot;overwrite&quot;).saveAsTable(&quot;historical_users_bronze_python_metadata&quot;)</pre>
+
+<h2>2. Die Rescued-Data-Spalte: Schema-Abweichungen abfangen statt verlieren</h2>
+<p>Nicht jede Zeile einer Quelldatei passt exakt zum erwarteten Schema der Zieltabelle. Ohne Gegenmaßnahme würde ein Wert, der nicht in den erwarteten Datentyp konvertiert werden kann, beim Laden entweder den ganzen Job abbrechen lassen oder &ndash; schlimmer &ndash; stillschweigend als <code>NULL</code> verschwinden. Genau hier setzt die <strong>Rescued-Data-Spalte</strong> (<code>_rescued_data</code>) an: <code>read_files()</code>, <code>spark.read</code> und Auto Loader legen sie automatisch an, sobald Werte nicht zum Schema passen, und speichern die nicht einlesbaren Originalwerte als JSON-formatierten String &ndash; inklusive Dateipfad der Quelle. Passt eine Zeile vollständig zum Schema, bleibt <code>_rescued_data</code> für diese Zeile <code>NULL</code>.</p>
+
+<figure class="img">
+<img src="assets/01/rescued-data-example.png">
+<figcaption>Der Wert &bdquo;$100&ldquo; kann nicht als BIGINT gelesen werden und landet deshalb als JSON-String in der Spalte <code>_rescued_data</code>, statt die Zeile zu verwerfen.</figcaption>
+</figure>
+
+<p>Typische Auslöser für gerettete Werte sind fehlende Spalten im Schema, Typ-Konflikte (z. B. Text statt Zahl) oder Groß-/Kleinschreibungs-Konflikte bei Spaltennamen. Besonders häufig tritt das bei CSV-Dateien auf, weil CSV im Gegensatz zu Parquet kein eingebettetes Schema mitbringt. Im folgenden Beispiel enthält eine CSV-Zeile den Wert <code>aaa</code> in einer eigentlich numerischen Spalte; mit einem explizit definierten Schema und aktivierter Rescued-Data-Spalte wird die fehlerhafte Zeile nicht verworfen, sondern gezielt sichtbar gemacht:</p>
+
+<pre class="code sql">SELECT *
+FROM read_files(
+  &#x27;/Volumes/dbacademy/ops/labuser/csv_demo_files/malformed_example_1_data.csv&#x27;,
+  format =&gt; &quot;csv&quot;,
+  sep =&gt; &quot;|&quot;,
+  header =&gt; true,
+  schema =&gt; &#x27;&#x27;&#x27;
+      order_id INT,
+      email STRING,
+      transactions_timestamp BIGINT&#x27;&#x27;&#x27;,
+  rescuedDataColumn =&gt; &quot;_rescued_data&quot;
+);</pre>
+
+<p>Fehlt in einer CSV-Datei sogar der Spaltenname selbst (z. B. durch einen fehlerhaften Header), wird die betroffene Spalte unter dem generischen Schlüssel <code>_c0</code> im JSON der Rescued-Data-Spalte abgelegt. Mit der <code>:</code>-Pfadsyntax lässt sich der Wert anschließend gezielt extrahieren und in eine reguläre Spalte überführen:</p>
+
+<pre class="code sql">SELECT
+  cast(_rescued_data:_c0 AS BIGINT) AS order_id,
+  *
+FROM read_files(
+  &#x27;/Volumes/dbacademy/ops/labuser/csv_demo_files/malformed_example_2_data.csv&#x27;,
+  format =&gt; &quot;csv&quot;,
+  sep =&gt; &quot;|&quot;,
+  header =&gt; true
+);</pre>
+
+<p>Im PySpark-Äquivalent wird die Rescued-Data-Spalte über die Option <code>rescuedDataColumn</code> aktiviert:</p>
+
+<pre class="code python">df = (spark.read
+      .option(&quot;header&quot;, True)
+      .option(&quot;sep&quot;, &quot;|&quot;)
+      .option(&quot;rescuedDataColumn&quot;, &quot;_rescued_data&quot;)
+      .csv(&quot;/Volumes/dbacademy_ecommerce/v01/raw/sales-csv&quot;))</pre>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Die Rescued-Data-Spalte ist eng mit dem Konzept der <strong>Schema Evolution</strong> verzahnt, insbesondere bei Auto Loader: Wird der Schema-Evolution-Modus auf <code>rescue</code> gesetzt, werden nicht nur fehlende oder falsch typisierte Spalten, sondern auch erkannte Typänderungen zunächst in <code>_rescued_data</code> abgelegt, statt das Zielschema sofort automatisch zu erweitern. In den Modi <code>DROPMALFORMED</code> bzw. <code>FAILFAST</code> führen Typkonflikte durch die aktivierte Rescued-Data-Spalte nicht mehr zum Verwerfen der Zeile bzw. zum Abbruch des Jobs &ndash; nur noch tatsächlich korrupte, nicht parsebare Datensätze (z. B. unvollständiges JSON) lösen weiterhin einen Fehler aus.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader/schema">Configure schema inference and evolution in Auto Loader &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

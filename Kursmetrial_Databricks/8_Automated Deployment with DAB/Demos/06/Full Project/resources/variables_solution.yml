@@ -1,0 +1,72 @@
+#########################################
+# DEFINE THE VARIABLES USED IN THE DAB  #
+#########################################
+
+variables:
+  ###############################################################
+  ## PLEASE ONLY CHANGE THE VARIABLES IN THE FOLLOWING SECTION  #
+  ###############################################################
+  username:
+    description: Paste your username here
+    default: ${workspace.current_user.short_name}
+
+  my_email:
+    description: Email address to send an alert notification to
+    default: fake@databricks.com
+
+## Lookup variable 
+## - Obtain the user's cluster id for the lab using the cluster name
+  cluster_id:
+    description: Get the lab cluster ID using a lookup variable.
+    lookup:
+      cluster: labuser1234     #<----- Use your lab user name here. In the labs, your user name is your cluster name. You can also have harded coded a cluster name here.
+  ##########################################
+  ## DO NOT CHANGE ANY VALUES BELOW!!!     #
+  ## DO NOT CHANGE ANY VALUES BELOW!!!     #
+  ##########################################
+
+  ###############################################
+  # Dynamically set the catalog_dev variable    #
+  ###############################################
+  dev_tag:
+    description: Sets the dev tag for the catalog name
+    default: _1_dev
+  catalog_dev:
+    description: Sets the catalog to create tables in
+    default: ${var.username}${var.dev_tag}
+
+  ###############################################
+  # Dynamically set the catalog_stage variable  #
+  ###############################################
+  stage_tag:
+    description: Sets the stage tag for the catalog name
+    default: _2_stage
+  catalog_stage:
+    description: Sets the catalog to create tables in
+    default: ${var.username}${var.stage_tag}
+
+  ###############################################
+  # Dynamically set the catalog_prod variable   #
+  ###############################################
+  prod_tag:
+    description: Sets the prod tag for the catalog name
+    default: _3_prod
+  catalog_prod:
+    description: Sets the catalog to create tables in
+    default: ${var.username}${var.prod_tag}
+
+  schema:
+    description: Schema to write to
+    default: default
+
+##############################################################################################
+# Default values for raw_data_path and target_catalog point to the dev raw data and catalog. #
+# This values will be modified based on the deployed target in the databricks.yml file.      #
+##############################################################################################
+  raw_data_path:
+    description: Path to source csv files to ingest (dev/stage/prod) - default is 'dev'
+    default: /Volumes/${var.catalog_dev}/default/health
+  target_catalog:
+    description: Target catalog to use for deployment
+    default: ${var.catalog_dev}
+

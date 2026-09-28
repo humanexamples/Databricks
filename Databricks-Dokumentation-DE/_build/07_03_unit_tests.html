@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Unit Tests für PySpark (pytest, assertDataFrameEqual)</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Unit Tests für PySpark (pytest, assertDataFrameEqual)</h1>
+<p class="subtitle">Section 5 &middot; Implementing CI-CD &middot; Quelle: Kurs 4, M02 Kapitel 9&ndash;10 + tests/unit_tests/</p>
+
+<p>Unit-Tests prüfen einzelne Funktionen isoliert &ndash; ohne einen kompletten Pipeline-Lauf und ohne echte Produktionsdaten. Für PySpark-Code stellt Apache Spark seit Version 3.5 mit dem Modul <code>pyspark.testing.utils</code> zwei speziell auf DataFrames zugeschnittene Vergleichsfunktionen bereit: <code>assertDataFrameEqual</code> und <code>assertSchemaEqual</code>. In Kombination mit dem Python-Testframework <strong>pytest</strong> lassen sich damit die im vorigen Kapitel modularisierten Funktionen systematisch absichern.</p>
+
+<h2>1. Testaufbau mit einer pytest-Fixture</h2>
+<p>Da PySpark-Funktionen eine aktive <code>SparkSession</code> benötigen, wird diese üblicherweise einmal pro Testlauf über eine pytest-<strong>Fixture</strong> bereitgestellt und an alle Testfunktionen weitergereicht:</p>
+
+<pre class="code python">import pytest
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType, DateType, DoubleType, LongType
+from pyspark.sql.functions import when, col
+from pyspark.testing.utils import assertDataFrameEqual, assertSchemaEqual
+
+from src.helpers import project_functions
+
+
+@pytest.fixture(scope=&quot;session&quot;)
+def spark():
+    spark = SparkSession.builder.getOrCreate()
+    yield spark</pre>
+
+<h2>2. Schema-Test mit assertSchemaEqual</h2>
+<p>Die Funktion <code>assertSchemaEqual</code> vergleicht ausschließlich das Schema zweier DataFrames (Spaltennamen, Datentypen, Nullable-Flag) &ndash; ideal, um sicherzustellen, dass eine Schema-Definitionsfunktion wie <code>get_health_csv_schema()</code> nach künftigen Änderungen weiterhin das erwartete Format liefert:</p>
+
+<pre class="code python">def test_get_health_csv_schema_match():
+    expected_schema = StructType([
+        StructField(&quot;ID&quot;, IntegerType(), True),
+        StructField(&quot;PII&quot;, StringType(), True),
+        StructField(&quot;date&quot;, DateType(), True),
+        StructField(&quot;HighCholest&quot;, IntegerType(), True),
+        StructField(&quot;HighBP&quot;, DoubleType(), True),
+        StructField(&quot;BMI&quot;, DoubleType(), True),
+        StructField(&quot;Age&quot;, DoubleType(), True),
+        StructField(&quot;Education&quot;, DoubleType(), True),
+        StructField(&quot;income&quot;, IntegerType(), True)
+    ])
+
+    actual_schema = project_functions.get_health_csv_schema()
+    assertSchemaEqual(actual_schema, expected_schema)</pre>
+
+<h2>3. Datenvergleich mit assertDataFrameEqual</h2>
+<p>Um eine Mapping-Funktion wie <code>high_cholest_map</code> zu testen, erzeugt man einen kleinen, handgeschriebenen Beispiel-DataFrame mit bekannten Eingaben, wendet die zu testende Funktion darauf an, und vergleicht das Ergebnis mit einem ebenfalls handgeschriebenen erwarteten DataFrame:</p>
+
+<pre class="code python">def test_high_cholest_column_valid_map(spark):
+    data = [(0,), (1,), (2,), (3,), (4,), (None,)]
+    sample_df = spark.createDataFrame(data, [&quot;value&quot;])
+
+    actual_df = sample_df.withColumn(&quot;actual&quot;, project_functions.high_cholest_map(&quot;value&quot;))
+
+    expected_df = spark.createDataFrame(
+        [(0, &quot;Normal&quot;), (1, &quot;Above Average&quot;), (2, &quot;High&quot;),
+         (3, &quot;Unknown&quot;), (4, &quot;Unknown&quot;), (None, &quot;Unknown&quot;)],
+        schema=StructType([
+            StructField(&quot;value&quot;, LongType(), True),
+            StructField(&quot;actual&quot;, StringType(), True)
+        ])
+    )
+
+    assertDataFrameEqual(actual_df.select(col(&#x27;actual&#x27;)), expected_df.select(col(&#x27;actual&#x27;)))</pre>
+
+<p>Wichtig: Werden diese Tests über die Kommandozeile mit <code>pytest</code> ausgeführt (nicht als Notebook-Zelle), muss der Pfad zum <code>src</code>-Modul im <code>PYTHONPATH</code> verfügbar sein, damit <code>from src.helpers import project_functions</code> funktioniert &ndash; genau dieser Aufruf ist es auch, der später in einer CI-Pipeline automatisiert ausgeführt wird (siehe Kapitel 4).</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation/Apache Spark:</strong> <code>assertDataFrameEqual</code> unterstützt zahlreiche optionale Parameter, um den Vergleich flexibel zu steuern &ndash; u. a. <code>checkRowOrder</code> (Zeilenreihenfolge ignorieren), <code>rtol</code>/<code>atol</code> (Toleranzen für Fließkommazahlen), <code>ignoreColumnOrder</code> und <code>ignoreColumnType</code>. Bei sehr großen DataFrames kann die Funktion laut Databricks-Knowledgebase zu <code>OutOfMemoryError</code> führen, da für den Vergleich Daten auf den Treiber gesammelt werden &ndash; für Unit-Tests sollten daher bewusst kleine, handgeschriebene Beispieldatensätze verwendet werden, wie auch im Kurs gezeigt.<br>
+Quelle: <a href="https://spark.apache.org/docs/latest/api/python/reference/api/pyspark.testing.assertDataFrameEqual.html">pyspark.testing.assertDataFrameEqual &ndash; Apache-Spark-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

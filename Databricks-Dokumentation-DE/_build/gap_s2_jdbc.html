@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Daten laden via JDBC/ODBC und REST-APIs in Notebooks</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Daten laden via JDBC/ODBC und REST-APIs in Notebooks</h1>
+<p class="subtitle">Section 2 &middot; Data Ingestion and Loading &middot; Quelle: Databricks-Dokumentation (JDBC/ODBC)</p>
+
+<p>Nicht jede Datenquelle lässt sich über einen Lakeflow-Connect-Connector oder Auto Loader anbinden. Für klassische relationale Datenbanken (SQL Server, PostgreSQL, MySQL, Oracle, &hellip;) sowie für Systeme, die nur eine REST-API anbieten, ist es üblich, direkt aus einem Notebook heraus per <strong>JDBC/ODBC</strong> bzw. per HTTP-Client Daten zu laden und anschließend in Cloud-Speicher oder direkt in eine Unity-Catalog-verwaltete Tabelle zu schreiben.</p>
+
+<h2>1. Datenbanken per JDBC anbinden</h2>
+<p>Spark bringt einen generischen JDBC-Datenquellen-Connector mit. Damit lässt sich eine komplette Tabelle oder das Ergebnis einer beliebigen SQL-Abfrage direkt als DataFrame laden:</p>
+<pre class="code python">jdbc_url = &quot;jdbc:postgresql://my-db-host:5432/salesdb&quot;
+
+df = (spark.read
+      .format(&quot;jdbc&quot;)
+      .option(&quot;url&quot;, jdbc_url)
+      .option(&quot;dbtable&quot;, &quot;public.orders&quot;)
+      .option(&quot;user&quot;, dbutils.secrets.get(scope=&quot;db&quot;, key=&quot;user&quot;))
+      .option(&quot;password&quot;, dbutils.secrets.get(scope=&quot;db&quot;, key=&quot;password&quot;))
+      .option(&quot;driver&quot;, &quot;org.postgresql.Driver&quot;)
+      .load())
+
+df.write.mode(&quot;overwrite&quot;).saveAsTable(&quot;main.bronze.orders_raw&quot;)</pre>
+<p>Wichtig für produktive Ingestion großer Tabellen: Ohne weitere Optionen liest Spark die gesamte Tabelle über eine einzige Verbindung/Partition &ndash; das skaliert schlecht. Mit <code>partitionColumn</code>, <code>lowerBound</code>, <code>upperBound</code> und <code>numPartitions</code> lässt sich der Lesevorgang auf mehrere parallele JDBC-Verbindungen aufteilen:</p>
+<pre class="code python">df = (spark.read
+      .format(&quot;jdbc&quot;)
+      .option(&quot;url&quot;, jdbc_url)
+      .option(&quot;dbtable&quot;, &quot;public.orders&quot;)
+      .option(&quot;partitionColumn&quot;, &quot;order_id&quot;)
+      .option(&quot;lowerBound&quot;, &quot;1&quot;)
+      .option(&quot;upperBound&quot;, &quot;1000000&quot;)
+      .option(&quot;numPartitions&quot;, &quot;8&quot;)
+      .load())</pre>
+<p>Credentials sollten dabei &ndash; wie im Beispiel &ndash; nie im Klartext im Notebook stehen, sondern über <strong>Databricks Secrets</strong> (<code>dbutils.secrets.get(...)</code>) referenziert werden.</p>
+
+<h2>2. ODBC: dieselbe Aufgabe aus der anderen Richtung</h2>
+<p>Während JDBC in diesem Szenario verwendet wird, um <em>aus</em> Databricks heraus eine externe Datenbank anzuzapfen, wird der von Databricks bereitgestellte <strong>ODBC-Treiber</strong> meist in die andere Richtung genutzt: Externe BI-Tools (Power BI, Tableau) verbinden sich per ODBC/JDBC <em>zu</em> Databricks, um auf Unity-Catalog-Tabellen zuzugreifen. Für die Prüfung reicht das Verständnis, dass beide Treiber dem gleichen Zweck dienen &ndash; standardisierter Datenbankzugriff &ndash; nur aus jeweils entgegengesetzter Blickrichtung.</p>
+
+<h2>3. REST-APIs aus dem Notebook heraus abfragen</h2>
+<p>Für Systeme ohne JDBC-Schnittstelle (z. B. SaaS-Anwendungen mit REST-API) wird die Anfrage typischerweise mit Pythons Standard-HTTP-Bibliotheken direkt im Notebook ausgeführt und das JSON-Ergebnis anschließend in ein Spark-DataFrame überführt:</p>
+<pre class="code python">import requests
+
+response = requests.get(
+    &quot;https://api.example.com/v1/customers&quot;,
+    headers={&quot;Authorization&quot;: f&quot;Bearer {dbutils.secrets.get(&#x27;api&#x27;, &#x27;token&#x27;)}&quot;}
+)
+response.raise_for_status()
+records = response.json()[&quot;data&quot;]
+
+# In ein Spark-DataFrame überführen und als Delta-Tabelle schreiben
+df = spark.createDataFrame(records)
+df.write.mode(&quot;append&quot;).saveAsTable(&quot;main.bronze.customers_api_raw&quot;)</pre>
+<p>Solche REST-Ingestion-Notebooks werden in der Praxis so gut wie nie manuell gestartet, sondern als <strong>Notebook-Task innerhalb eines Lakeflow Jobs</strong> geplant &ndash; z. B. stündlich per Cron-Schedule, damit neue Datensätze regelmäßig automatisiert nachgeladen werden (siehe Section 4 zu Lakeflow Jobs).</p>
+
+<h2>4. Einordnung gegenüber anderen Ingestion-Methoden</h2>
+<table>
+<tr><th>Methode</th><th>Typischer Anwendungsfall</th></tr>
+<tr><td>Lakeflow Connect (Managed Connector)</td><td>Verbreitete Enterprise-/SaaS-Quellen mit vorgefertigtem, wartungsarmem Connector</td></tr>
+<tr><td>Auto Loader</td><td>Dateibasierte Quellen in Cloud-Speicher, kontinuierlich wachsend</td></tr>
+<tr><td>JDBC/ODBC im Notebook</td><td>Klassische relationale Datenbanken ohne Managed Connector, einmalige oder geplante Batch-Abzüge</td></tr>
+<tr><td>REST-Client im Notebook</td><td>SaaS-/Web-APIs ohne Datenbankschnittstelle und ohne verfügbaren Managed Connector</td></tr>
+</table>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks stellt sowohl einen offiziellen JDBC- als auch einen ODBC-Treiber bereit, die dem Industriestandard folgen und u. a. auch von BI-Tools zum Zugriff <em>auf</em> Unity-Catalog-Tabellen genutzt werden. Für den ODBC-Treiber ab Version 2.6.17 wird zusätzlich <strong>Cloud Fetch</strong> unterstützt: Große Abfrageergebnisse werden dabei über den ans Databricks-Deployment angebundenen Cloud-Speicher statt über eine einzelne Verbindung übertragen, was den Datendurchsatz bei großen Ergebnismengen deutlich erhöht.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/integrations/jdbc-odbc-bi.html">Databricks ODBC and JDBC Drivers &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

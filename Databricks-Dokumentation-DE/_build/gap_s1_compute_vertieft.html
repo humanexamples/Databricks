@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Compute vertieft: Instance-Typen, Pools und Spot-Instances</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Compute vertieft: Instance-Typen, Pools und Spot-Instances</h1>
+<p class="subtitle">Section 1 &middot; Databricks Intelligence Plattform &middot; Quelle: Udemy-Kursmaterial &bdquo;Cluster Best Practices&ldquo;, erg&auml;nzt mit Databricks-Dokumentation</p>
+
+<p>Kapitel 2 dieser Section hat die vier Compute-Typen (All-Purpose, Job, SQL-Warehouse, Serverless) und ihre Kostenlogik bereits vorgestellt, Section 6 Kapitel 6 die Spot-Instance-Konfiguration. Dieses Kapitel ergänzt zwei praktische Bausteine der Cluster-Konfiguration, die dort noch nicht behandelt wurden: die Wahl des richtigen <strong>Instance-Typs</strong> je nach Workload und <strong>Instance Pools</strong> zur Beschleunigung des Cluster-Starts.</p>
+
+<h2>1. Classic vs. Serverless: die zwei Grundkategorien</h2>
+<p>Sämtliche Compute-Typen aus Kapitel 2 lassen sich einer von zwei übergeordneten Kategorien zuordnen: <strong>Classic Compute</strong> (All-Purpose, Job, Pools, SQL-Warehouses &ndash; die Infrastruktur wird vom Cloud-Anbieter bereitgestellt und ist konfigurierbar) und <strong>Serverless Compute</strong> (Notebooks, Jobs, Pipelines, SQL-Warehouses &ndash; Databricks verwaltet die Infrastruktur vollständig selbst).</p>
+
+<figure class="img">
+<img src="assets/s1/compute_classic_vs_serverless.png">
+<figcaption>Databricks Compute gliedert sich in Classic Compute (konfigurierbare Cloud-Infrastruktur) und Serverless Compute (vollständig von Databricks verwaltet).</figcaption>
+</figure>
+
+<h2>2. Instance Family: die passende VM-Kategorie wählen</h2>
+<p>Bei Classic Compute lässt sich die zugrunde liegende virtuelle Maschine gezielt nach Workload-Typ auswählen. Die falsche Wahl kostet entweder unnötig Geld (überdimensioniert) oder Performance (unterdimensioniert):</p>
+<table>
+<tr><th>VM-Kategorie</th><th>Geeignet für</th></tr>
+<tr><td><strong>Memory Optimized</strong></td><td>Umfangreiches Shuffling/Spilling, Spark-Caching, speicherintensive ML-Workloads</td></tr>
+<tr><td><strong>Compute Optimized</strong></td><td>Structured-Streaming-Jobs, ELT mit vollständigem Scan ohne Datenwiederverwendung, <code>OPTIMIZE</code>/<code>ZORDER</code></td></tr>
+<tr><td><strong>Storage Optimized</strong></td><td>Delta-Caching, Ad-hoc-/interaktive Analysen, ML/DL-Workloads mit Daten-Caching</td></tr>
+<tr><td><strong>GPU Optimized</strong></td><td>ML/DL-Workloads mit außergewöhnlich hohem Speicherbedarf</td></tr>
+<tr><td><strong>General Purpose</strong></td><td>Keine speziellen Anforderungen; <code>VACUUM</code></td></tr>
+</table>
+
+<figure class="img">
+<img src="assets/s1/instance_family_workload_types.png">
+<figcaption>Die Wahl der VM-Kategorie richtet sich nach dem Workload-Typ: Memory-, Compute-, Storage- oder GPU-optimiert, oder General Purpose ohne besondere Anforderungen.</figcaption>
+</figure>
+
+<p>Spot-Instances als weiteres Mittel zur Kostensenkung &ndash; inklusive der bewährten Driver-on-Demand/Worker-als-Spot-Konfiguration und konkreter Ersparnis-/Ausfallraten je Instanztyp &ndash; behandelt bereits Section 6, Kapitel 6 ausführlich.</p>
+
+<h2>3. Instance Pools: schnellerer Cluster-Start</h2>
+<p>Ein <strong>Instance Pool</strong> ist eine Menge bereits laufender, ungenutzter virtueller Maschinen, die auf ihren Einsatz warten. Wird ein neuer Cluster (oder eine Autoscaling-Erweiterung) aus einem Pool heraus erstellt, entfällt die sonst übliche VM-Boot-Zeit &ndash; Cluster-Start und Autoscaling werden dadurch spürbar beschleunigt. Wichtig für die Kostenkalkulation: Databricks selbst berechnet für ungenutzte Instanzen im Pool <strong>keine</strong> DBU-Gebühr, der Cloud-Anbieter stellt diese Instanzen aber weiterhin in Rechnung, da sie technisch im eigenen Cloud-Konto laufen.</p>
+
+<h2>4. Pro vs. Serverless SQL-Warehouse</h2>
+<p>Ergänzend zur Übersicht aus Kapitel 2: Bei <strong>klassischen (Pro) SQL-Warehouses</strong> greift man konkret dann, wenn entweder in der gewählten Cloud-Region <strong>kein Serverless-Warehouse verfügbar</strong> ist, oder wenn ein <strong>benutzerdefiniertes Netzwerk-Setup</strong> benötigt wird &ndash; etwa um aus dem SQL-Warehouse heraus Datenbanken oder Event-Busse im eigenen Cloud-Netzwerk oder On-Premises anzubinden. Serverless-Warehouses bleiben für die meisten Fälle (ETL, BI, explorative Analysen) die einfachere und schneller startende Wahl.</p>
+
+<figure class="img">
+<img src="assets/s1/pricing_serverless_vs_classic.png">
+<figcaption>Kostenvergleich: Serverless Compute bündelt DBU- und Infrastrukturkosten in einem einzigen Posten; bei Classic Compute kommen Cloud-Anbieter-Instanzkosten und ggf. operative Kosten für die manuelle Cluster-Verwaltung hinzu.</figcaption>
+</figure>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks empfiehlt, die Instance-Family-Auswahl regelmäßig anhand des Spark-UI (insbesondere Shuffle-Read/-Write und Spill-Metriken) zu überprüfen und bei Bedarf anzupassen, statt sie einmalig festzulegen &ndash; Workload-Charakteristika ändern sich mit wachsendem Datenvolumen. Für Instance Pools gilt zudem: Ein Pool kann eine minimale Anzahl an Idle-Instanzen sowie eine maximale Gesamtkapazität festlegen; Instanzen oberhalb des Minimums werden nach einer konfigurierbaren Leerlaufzeit automatisch beendet, um unnötige Cloud-Kosten zu vermeiden.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/compute/pools">Pool configuration reference &ndash; Databricks-Dokumentation</a> &middot; <a href="https://docs.databricks.com/aws/en/compute/configure">Compute configuration reference &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Software-Engineering-Best-Practices & Code-Modularisierung</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Software-Engineering-Best-Practices & Code-Modularisierung</h1>
+<p class="subtitle">Section 5 &middot; Implementing CI-CD &middot; Quelle: Kurs 4, M02 Kapitel 1&ndash;4</p>
+
+<p>Databricks-Notebooks laden dazu ein, schnell loszulegen &ndash; doch genau das führt oft zu langen, monolithischen Skripten, die Ingestion, Transformation und Business-Logik in einer einzigen Zellenkette vermischen. Solcher Code lässt sich schwer testen, wiederverwenden oder von mehreren Personen gemeinsam pflegen. Software-Engineering-Best-Practices helfen dabei, aus Notebook-Prototypen wartbare, produktionsreife Data-Pipelines zu machen.</p>
+
+<h2>1. Kernprinzipien guter Data-Engineering-Praxis</h2>
+<ul>
+<li><strong>Lesbarkeit:</strong> klare Namen, konsistente Formatierung, kurze Funktionen &ndash; reduziert Fehler bei späteren Änderungen.</li>
+<li><strong>Dokumentation:</strong> Docstrings und Kommentare, die das <em>Warum</em> statt das offensichtliche <em>Was</em> erklären.</li>
+<li><strong>Automatisiertes Testen:</strong> Unit- und Integrationstests, die Regressionen frühzeitig aufdecken (siehe Kapitel 3 und 4 dieses Themenordners).</li>
+<li><strong>Versionskontrolle &amp; Code-Review:</strong> Änderungen nachvollziehbar machen und vor dem Merge gegenprüfen (siehe Kapitel 5).</li>
+<li><strong>Isolierte Umgebungen:</strong> strikte Trennung von Entwicklungs-, Test- und Produktionsdaten (z. B. eigene Unity-Catalog-Kataloge je Umgebung).</li>
+</ul>
+
+<h2>2. Vom Monolithen zur modularen Funktion</h2>
+<p>Der zentrale Refactoring-Schritt ist, wiederkehrende Logik (Schema-Definitionen, Transformationen, Schreibvorgänge) aus dem Notebook-Ablauf in benannte, einzeln testbare Python-Funktionen auszulagern und in einem gemeinsamen Modul abzulegen. Aus dem folgenden Ausschnitt eines Bronze-Ingestion-Schritts &hellip;</p>
+
+<pre class="code python"># Vorher: Schema-Definition direkt im Notebook-Flow
+health_csv_schema = StructType([
+    StructField(&quot;ID&quot;, IntegerType(), True),
+    StructField(&quot;PII&quot;, StringType(), True),
+    StructField(&quot;date&quot;, DateType(), True),
+    StructField(&quot;HighCholest&quot;, IntegerType(), True),
+    StructField(&quot;HighBP&quot;, DoubleType(), True),
+    StructField(&quot;BMI&quot;, DoubleType(), True),
+    StructField(&quot;Age&quot;, DoubleType(), True),
+    StructField(&quot;Education&quot;, DoubleType(), True),
+    StructField(&quot;income&quot;, IntegerType(), True)
+])</pre>
+
+<p>&hellip; wird eine wiederverwendbare, dokumentierte Funktion in einem eigenen Modul <code>src/helpers/project_functions.py</code>:</p>
+
+<pre class="code python">from pyspark.sql.types import StructType, StructField, IntegerType, StringType, DateType, DoubleType
+from pyspark.sql.functions import when, col
+
+
+def get_health_csv_schema():
+    &quot;&quot;&quot;Gibt das Schema für die Health-Data-CSV-Dateien zurück.&quot;&quot;&quot;
+    return StructType([
+        StructField(&quot;ID&quot;, IntegerType(), True),
+        StructField(&quot;PII&quot;, StringType(), True),
+        StructField(&quot;date&quot;, DateType(), True),
+        StructField(&quot;HighCholest&quot;, IntegerType(), True),
+        StructField(&quot;HighBP&quot;, DoubleType(), True),
+        StructField(&quot;BMI&quot;, DoubleType(), True),
+        StructField(&quot;Age&quot;, DoubleType(), True),
+        StructField(&quot;Education&quot;, DoubleType(), True),
+        StructField(&quot;income&quot;, IntegerType(), True)
+    ])
+
+
+def high_cholest_map(col_name: str):
+    &quot;&quot;&quot;Wandelt einen numerischen Cholesterin-Code in ein lesbares Label um.&quot;&quot;&quot;
+    return (
+        when(col(col_name) == 0, &#x27;Normal&#x27;)
+        .when(col(col_name) == 1, &#x27;Above Average&#x27;)
+        .when(col(col_name) == 2, &#x27;High&#x27;)
+        .otherwise(&#x27;Unknown&#x27;)
+    )</pre>
+
+<p>Im eigentlichen Notebook bleibt dann nur noch der eigentliche <em>Ablauf</em> übrig &ndash; lesbar als kurze Kette von Funktionsaufrufen:</p>
+
+<pre class="code python">from src.helpers.project_functions import get_health_csv_schema, high_cholest_map
+
+health_csv_df = read_health_data(
+    csv_path=f&quot;/Volumes/{DA.catalog_name}/default/health&quot;,
+    schema=get_health_csv_schema()
+)
+save_df_to_delta(health_csv_df, f&quot;{DA.catalog_name}.default.health_bronze_dev&quot;, mode=&quot;overwrite&quot;)</pre>
+
+<p>Der entscheidende Vorteil: Jede einzelne Funktion (Schema-Erzeugung, Mapping-Logik, Schreibvorgang) lässt sich isoliert mit Unit-Tests absichern, ohne dass dafür ein komplettes Notebook oder ein Spark-Cluster mit echten Produktionsdaten ausgeführt werden muss.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks empfiehlt, Python-Code für Data-Engineering-Projekte nicht nur in Notebooks, sondern zusätzlich als reguläre <strong>Workspace-Files</strong> (<code>.py</code>-Module) im Git-Ordner abzulegen. Dadurch lässt sich derselbe Code sowohl per <code>import</code> aus Notebooks als auch direkt von einer lokalen IDE oder einer CI-Pipeline aus testen &ndash; eine Voraussetzung für die in Kapitel 3 behandelten Unit-Tests.</div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

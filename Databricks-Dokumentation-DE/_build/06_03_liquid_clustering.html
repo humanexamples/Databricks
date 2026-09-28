@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Liquid Clustering und Predictive Optimization</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Liquid Clustering und Predictive Optimization</h1>
+<p class="subtitle">Section 6 &middot; Troubleshooting, Monitoring and Optimization &middot; Quelle: Kurs 7, Kapitel 2.2.5</p>
+
+<p>Z-Ordering und Partitionierung (Kapitel 06-2) haben einen gemeinsamen Nachteil: Sie erfordern manuelle Entscheidungen &ndash; welche Spalte, welche Kardinalität, wann neu optimieren &ndash; und reagieren schlecht auf sich ändernde Abfragemuster. <strong>Liquid Clustering</strong> ist Databricks' Antwort darauf: eine Technik, die Partitionierung und Z-Ordering ersetzen soll, indem sie sich automatisch und fortlaufend an die tatsächlichen Daten und Abfragen anpasst.</p>
+
+<h2>1. Warum &bdquo;liquid&ldquo;? Das Grundprinzip</h2>
+<p>Anders als bei starren Partitionsgrenzen zielt Liquid Clustering darauf ab, eine <strong>konsistente Zieldateigröße</strong> zu erreichen. Statt Daten in feste Partitionen zu zwingen, entscheidet Databricks intelligent, welche Wertebereiche zu welchen Dateien zusammengefasst werden, damit die Dateigrößen über die gesamte Tabelle hinweg möglichst gleichmäßig bleiben. Dazu speichert Liquid Clustering zusätzliche Metadaten, mit deren Hilfe neu geschriebene Daten direkt beim Schreiben (&bdquo;Clustering on Write&ldquo;) in die bestehende Clusterstruktur eingeordnet werden.</p>
+
+<figure class="img">
+<img src="assets/06/liquid-clustering.png">
+<figcaption>Liquid Clustering passt die Dateiaufteilung flexibel an die Daten an, statt sie in starre Partitionsgrenzen zu zwingen.</figcaption>
+</figure>
+
+<h2>2. Vorteile gegenüber Partitionierung und Z-Ordering</h2>
+<ul>
+<li><strong>Beste Performance ohne Tuning</strong> &ndash; Clustering erfolgt automatisch beim Schreiben, ganz ohne manuelle Konfiguration.</li>
+<li><strong>Konsistentes Data Skipping</strong> &ndash; unempfindlich gegenüber Data Skew, da keine starren Partitionsgrenzen existieren, die zu ungleich großen Dateien führen können.</li>
+<li><strong>Minimale Schreibverstärkung bei der Wartung</strong> &ndash; echtes <em>inkrementelles</em> <code>OPTIMIZE</code>: Nur die noch nicht optimal geclusterten Bereiche werden neu geschrieben, nicht die gesamte Tabelle.</li>
+<li><strong>Row-Level Concurrency</strong> &ndash; vereinfacht die Logik für nebenläufige Schreibvorgänge mehrerer gleichzeitiger Writer.</li>
+<li><strong>Weniger kognitive Last</strong> &ndash; es muss nicht mehr abgewogen werden, ob eine Spalte für Partitionierung geeignete (niedrige) Kardinalität besitzt; Liquid Clustering funktioniert unabhängig von der Kardinalität der Clustering-Spalten gut.</li>
+</ul>
+
+<h2>3. Liquid Clustering einrichten</h2>
+<p>Anstelle von <code>PARTITIONED BY</code> oder eines nachträglichen <code>ZORDER BY</code> wird beim Anlegen einer Tabelle <code>CLUSTER BY</code> mit den gewünschten Clustering-Spalten angegeben. Alternativ lässt sich mit <code>CLUSTER BY AUTO</code> die Auswahl der Clustering-Spalten vollständig Databricks überlassen (siehe <em>Predictive Optimization</em> unten).</p>
+
+<pre class="code sql">-- Tabelle mit Liquid Clustering anlegen
+CREATE TABLE events (
+  event_id   BIGINT,
+  event_time TIMESTAMP,
+  user_id    STRING,
+  event_type STRING
+)
+CLUSTER BY (event_type, user_id);
+
+-- Clustering-Keys nachträglich ändern -- ohne vollständige Neuschreibung der Tabelle
+ALTER TABLE events CLUSTER BY (event_type);
+
+-- Clustering periodisch anwenden (inkrementell, nur unclustered Daten werden bearbeitet)
+OPTIMIZE events;</pre>
+
+<h2>4. Tabellenstatistiken für den Cost-Based Optimizer</h2>
+<p>Unabhängig vom gewählten Layout-Verfahren lohnt es sich, regelmäßig aktuelle Tabellenstatistiken zu berechnen. Sie helfen der Adaptive Query Execution (Kapitel 06-1) unter anderem dabei, die passende Join-Strategie zu wählen, die richtige Build-Seite bei einem Hash-Join zu bestimmen und die Join-Reihenfolge bei Multi-Way-Joins zu kalibrieren.</p>
+
+<pre class="code sql">ANALYZE TABLE mytable COMPUTE STATISTICS FOR ALL COLUMNS;</pre>
+
+<h2>5. Predictive Optimization: automatische Wartung</h2>
+<p><strong>Predictive Optimization</strong> geht noch einen Schritt weiter als Liquid Clustering selbst: Sie übernimmt die routinemäßige Wartung von Delta-Tabellen vollautomatisch. Auf Basis der beobachteten Workload-Muster entscheidet Databricks im Hintergrund, wann <code>OPTIMIZE</code> (Dateigrößen optimieren) und <code>VACUUM</code> (nicht mehr benötigte Datendateien entfernen und so Speicherkosten senken) ausgeführt werden sollten &ndash; ganz ohne dass diese Jobs manuell geplant oder überwacht werden müssen. Wenn <code>CLUSTER BY AUTO</code> verwendet wird, wählt Predictive Optimization zusätzlich selbstständig die effektivsten Clustering-Spalten anhand des tatsächlichen Abfrageverhaltens aus und passt diese Wahl an, sobald sich die Zugriffsmuster ändern. Die Wartungsjobs laufen dabei auf Serverless-Compute, sodass auch hierfür keine eigene Cluster-Verwaltung nötig ist.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Mit <strong>Automatic Liquid Clustering</strong> analysiert Predictive Optimization die historische Abfrage-Workload einer Tabelle und wählt darauf aufbauend automatisch die Clustering-Keys, die den größten Nutzen beim Data Skipping bringen &ndash; Clustering-Keys werden dabei nur dann geändert, wenn die geschätzte Ersparnis durch besseres Data Skipping die Kosten der Neu-Clusterung übersteigt. Predictive Optimization ist für alle nach dem 11.&nbsp;November 2024 angelegten Accounts standardmäßig aktiviert; für bestehende Accounts erfolgt ein schrittweiser Rollout. Liquid Clustering ist zudem nicht mit Z-Ordering auf derselben Tabelle kompatibel.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/tables/clustering">Use liquid clustering for tables &ndash; Databricks-Dokumentation</a> &middot; <a href="https://docs.databricks.com/aws/en/optimizations/predictive-optimization">Predictive optimization for Unity Catalog managed tables</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Integrationstests mit Pipelines und Jobs</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Integrationstests mit Pipelines und Jobs</h1>
+<p class="subtitle">Section 5 &middot; Implementing CI-CD &middot; Quelle: Kurs 4, M02 Kapitel 12&ndash;13 + tests/integration_test/</p>
+
+<p>Unit-Tests prüfen einzelne Funktionen isoliert &ndash; sie sagen aber nichts darüber aus, ob eine komplette Pipeline mit ihren echten Ein- und Ausgabedaten korrekt funktioniert. Dafür braucht es <strong>Integrationstests</strong>. Für Lakeflow Declarative Pipelines (SDP) bieten sich zwei komplementäre Ansätze an: Datenqualitäts-Expectations direkt in der Pipeline, und separate Validierungs-Tasks in einem Lakeflow Job.</p>
+
+<h2>1. Integrationstests über SDP-Expectations</h2>
+<p>Eine einfache und wirkungsvolle Methode ist, innerhalb der Pipeline selbst eine Materialized View zu definieren, die eine erwartete Kennzahl (z. B. Zeilenanzahl je Umgebung) berechnet und über eine Expectation gegen einen Zielwert prüft. Da sich die erwartete Zeilenanzahl zwischen Entwicklungs- und Staging-Umgebung unterscheidet, wird der Zielwert dynamisch anhand der Pipeline-Konfiguration <code>target</code> ausgewählt:</p>
+
+<pre class="code python">from pyspark import pipelines as dp
+
+target = spark.conf.get(&quot;target&quot;)
+
+# Erwartete Zeilenzahlen je Umgebung (aus dem Kursbeispiel)
+target_integration_tests_validation = {
+    &#x27;development&#x27;: {&#x27;health_bronze&#x27;: {&#x27;total_rows&#x27;: 7500}, &#x27;health_silver&#x27;: {&#x27;total_rows&#x27;: 7500}},
+    &#x27;stage&#x27;:       {&#x27;health_bronze&#x27;: {&#x27;total_rows&#x27;: 35000}, &#x27;health_silver&#x27;: {&#x27;total_rows&#x27;: 35000}}
+}
+
+if target in (&#x27;development&#x27;, &#x27;stage&#x27;):
+    total_expected_bronze = target_integration_tests_validation[target][&#x27;health_bronze&#x27;][&#x27;total_rows&#x27;]
+    total_expected_silver = target_integration_tests_validation[target][&#x27;health_silver&#x27;][&#x27;total_rows&#x27;]
+
+
+def test_count_table_total_rows(table_name, total_count, target):
+    &quot;&quot;&quot;Erstellt eine Materialized View, die die Zeilenanzahl einer Tabelle
+    gegen den für die aktuelle Umgebung erwarteten Wert prüft.&quot;&quot;&quot;
+    @dp.expect_all_or_fail({&quot;row_count_matches&quot;: f&quot;count = {total_count}&quot;})
+    @dp.table(name=f&quot;test_{table_name}_row_count&quot;)
+    def _row_count_check():
+        return spark.sql(f&quot;SELECT COUNT(*) AS count FROM {table_name}&quot;)</pre>
+
+<p>Schlägt die Expectation fehl (z. B. weil nach einer Code-Änderung plötzlich Zeilen verloren gehen), bricht der Pipeline-Lauf ab bzw. wird die Abweichung im Event-Log sichtbar &ndash; je nachdem, welche der drei Expectation-Aktionen (WARN/DROP ROW/FAIL UPDATE) gewählt wurde. In Produktion wird meist bewusst nur ein Teil der Tests ausgeführt (z. B. nur die Gold-Tabellen-Prüfung), um die Laufzeit gering zu halten.</p>
+
+<h2>2. Integrationstests über Lakeflow-Jobs-Tasks</h2>
+<p>Alternativ oder ergänzend lässt sich ein mehrstufiger Lakeflow Job aufbauen, dessen Tasks nacheinander ausgeführt werden: zuerst ein Task, der die Unit-Tests via <code>pytest</code> ausführt, danach ein Pipeline-Task für die eigentliche SDP-ETL-Pipeline, und optional ein abschließender Visualisierungs- oder Validierungs-Task. Schlägt ein früherer Task fehl, werden nachfolgende Tasks (dank Task-Abhängigkeiten, siehe Section 4) gar nicht erst gestartet &ndash; fehlerhafter Code gelangt so nicht in die nächste Umgebung.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks empfiehlt, für das Testen von Pipelines gezielt eigene Entwicklungs-/Test-Datasets mit sowohl korrekten als auch bewusst fehlerhaften Datensätzen zu verwenden, um zu prüfen, ob die Pipeline-Logik (inklusive Expectations) Fehlerfälle wie erwartet behandelt. Da jeder Pipeline-Lauf ein strukturiertes Event-Log als Delta-Tabelle schreibt (mit Ausführungsfortschritt, Expectation-Ergebnissen und Datenherkunft), kann dieses Log direkt für automatisierte Integrationstests über dev/stage/prod hinweg abgefragt werden, statt eigene Zähl-Views wie oben von Hand zu pflegen.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/ldp/expectations">Manage data quality with pipeline expectations &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

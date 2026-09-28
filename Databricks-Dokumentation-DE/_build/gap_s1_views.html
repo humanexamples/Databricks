@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Views: Stored, Temporary und Global Temporary Views</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Views: Stored, Temporary und Global Temporary Views</h1>
+<p class="subtitle">Section 1 &middot; Databricks Intelligence Plattform &middot; Quelle: Udemy-Kursmaterial &bdquo;Views&ldquo;, erg&auml;nzt mit Databricks-Dokumentation</p>
+
+<p>Neben Tabellen und Volumes kennt Databricks ein drittes relationales Objekt: die <strong>View</strong>. Eine View ist eine <strong>virtuelle Tabelle ohne eigene physische Daten</strong> &ndash; sie ist im Kern nichts anderes als eine gespeicherte SQL-Abfrage gegen bestehende Tabellen, die bei jeder Nutzung der View erneut ausgeführt wird.</p>
+
+<h2>1. Views als gespeicherte Abfrage</h2>
+<p>Eine View kombiniert und filtert Spalten aus einer oder mehreren zugrunde liegenden Tabellen zu einem neuen, logischen Ergebnis:</p>
+<pre class="code sql">CREATE VIEW view_x
+AS SELECT A1, A4, B2, B3
+FROM table_1
+INNER JOIN table_2 ...;</pre>
+
+<figure class="img">
+<img src="assets/s1/view_diagram.png">
+<figcaption>Eine View führt bei jeder Abfrage die zugrunde liegende SQL-Anweisung erneut gegen die Quelltabellen aus, statt eigene Daten zu speichern.</figcaption>
+</figure>
+
+<p>Nach der Erstellung lässt sich eine View genauso abfragen wie eine gewöhnliche Tabelle &ndash; per <code>SELECT</code>. Da bei jeder Abfrage die hinterlegte Query erneut gegen die aktuellen Daten der Basistabellen ausgeführt wird, spiegelt eine View immer den aktuellen Stand wider, ohne dass eigene Daten synchronisiert werden müssten.</p>
+
+<h2>2. Drei Sichtbarkeits-Varianten</h2>
+<p>Databricks unterscheidet drei Arten von Views, die sich in ihrer Lebensdauer und Sichtbarkeit unterscheiden:</p>
+<table>
+<tr><th></th><th>(Stored) View</th><th>Temporary View</th><th>Global Temporary View</th></tr>
+<tr><td>Sichtbarkeit</td><td>Über beliebig viele Sessions hinweg</td><td>Nur innerhalb der aktuellen Spark-Session</td><td>Über alle Sessions hinweg, solange derselbe Cluster läuft</td></tr>
+<tr><td>Persistenz</td><td>In der Datenbank gespeichert</td><td>Nicht gespeichert</td><td>Nicht gespeichert</td></tr>
+<tr><td>Entfernt durch</td><td>Nur explizit per <code>DROP VIEW</code></td><td>Automatisch beim Ende der Session</td><td>Automatisch beim Neustart des Clusters</td></tr>
+<tr><td>Syntax</td><td><code>CREATE VIEW</code></td><td><code>CREATE TEMP VIEW</code></td><td><code>CREATE GLOBAL TEMP VIEW</code></td></tr>
+</table>
+
+<h3>2.1 (Stored) Views</h3>
+<p>Wie Tabellen werden Stored Views dauerhaft in der Datenbank abgelegt &ndash; gespeichert wird dabei allerdings nur die Definition (die SQL-Abfrage), nicht die Daten selbst:</p>
+<pre class="code sql">CREATE VIEW view_name AS query;
+DROP VIEW view_name;</pre>
+
+<h3>2.2 Temporary Views</h3>
+<p>Eine Temporary View ist an die aktuelle <strong>Spark-Session</strong> gebunden und existiert nur so lange, wie diese Session läuft:</p>
+<pre class="code sql">CREATE TEMP VIEW view_name AS query;</pre>
+<p>Für die Prüfung relevant ist die Frage, <em>wann</em> in Databricks überhaupt eine neue Spark-Session entsteht &ndash; denn genau dann verschwinden alle bis dahin angelegten Temporary Views:</p>
+<ul>
+<li>beim Öffnen eines neuen Notebooks,</li>
+<li>beim Trennen und erneuten Verbinden (Detach/Reattach) eines Notebooks mit einem Cluster,</li>
+<li>nach der Installation eines Python-Pakets (da dies einen Neustart des Python-Interpreters auslöst),</li>
+<li>sowie nach einem Neustart des Clusters selbst.</li>
+</ul>
+
+<h3>2.3 Global Temporary Views</h3>
+<p>Eine Global Temporary View verhält sich ähnlich wie eine Temporary View, ist aber nicht an eine einzelne Session, sondern an den gesamten <strong>Cluster</strong> gebunden: Solange der Cluster läuft, kann jedes daran angehängte Notebook &ndash; unabhängig von seiner eigenen Session &ndash; auf sie zugreifen. Global Temporary Views werden dafür automatisch in einer eigenen, clusterweiten Datenbank namens <code>global_temp</code> abgelegt:</p>
+<pre class="code sql">CREATE GLOBAL TEMP VIEW view_name AS query;
+
+-- Zugriff erfordert den Datenbank-Qualifizierer &quot;global_temp&quot;
+SELECT * FROM global_temp.view_name;</pre>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Unity Catalog unterstützt zusätzlich zu den hier beschriebenen Grundtypen auch <strong>dynamische Views</strong>, bei denen die Sichtbarkeit einzelner Zeilen oder Spalten von Funktionen wie <code>current_user()</code> oder <code>is_account_group_member()</code> abhängt &ndash; ein älterer Ansatz für zeilen-/spaltenbasierte Zugriffskontrolle, der inzwischen weitgehend durch die in Section 7 behandelten Row Filters und Column Masks abgelöst wurde, syntaktisch aber weiterhin unterstützt wird.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/views/">Views &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,80 @@
+###########################################################################################
+# THIS IS THE MAIN DATABRICKS ASSET BUNDLE CONFIGURATION FOR THE PROJECT                  
+# - This will include the following:
+#   - variables.yml
+#   - health_etl_pipeline.pipeline.yml
+#   - dabs_workflow.job.yml
+###########################################################################################
+# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.         #
+###########################################################################################
+
+################
+# Bundle name  #
+################
+bundle:
+  name: health_etl_bundle
+
+
+#################################################################
+## Additional YAML configurations to include for the deployment #
+#################################################################
+include:
+  - "./resources/variables.yml"                       # You can define your variables within a separate YAML file
+  - "./resources/pipeline/health_etl_pipeline.pipeline.yml"    # Lakeflow Declarative Pipeline resource
+  - "./resources/job/dabs_workflow.job.yml"                    # Job resources
+
+##############################################################################################
+# These are the targets to use for deployments and workflow runs. One and only one of these  #
+##############################################################################################
+targets:
+
+  development:
+    # - Deployed resources get prefixed with '[dev my_user_name]'
+    # - Any job schedules and triggers are paused by default.
+    # See also https://docs.databricks.com/dev-tools/bundles/deployment-modes.html.
+    mode: development
+    default: true
+    # In Development, we will use classic compute for our tasks 
+    resources:
+      jobs:
+        health_etl_workflow:    # <----- Name of job to run
+          name: health_etl_workflow_${bundle.target}  # <---- Job name
+          tasks:
+            - task_key: Unit_Tests
+              existing_cluster_id: ${var.cluster_id}
+            - task_key: Visualization
+              existing_cluster_id: ${var.cluster_id}
+    workspace:
+      # host: can change host if isolating by workspace
+      # We explicitly specify /Workspace/Users/username to make sure we only have a single copy.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
+
+  stage:
+    mode: development
+      # In stage, we will use classic compute for our tasks 
+    resources:
+      jobs:
+        health_etl_workflow:    # <----- Name of job to run
+          name: health_etl_workflow_${bundle.target}  # <---- Job name
+          tasks:
+            - task_key: Unit_Tests
+              existing_cluster_id: ${var.cluster_id}
+            - task_key: Visualization
+              existing_cluster_id: ${var.cluster_id}
+    workspace:
+      # host: can change host if isolating by workspace
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      target_catalog: ${var.catalog_stage}
+      raw_data_path: /Volumes/${var.catalog_stage}/default/health
+
+
+  production:
+    mode: production
+    workspace:
+      # host: can change host if isolating by workspace
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      target_catalog: ${var.catalog_prod}
+      raw_data_path: /Volumes/${var.catalog_prod}/default/health

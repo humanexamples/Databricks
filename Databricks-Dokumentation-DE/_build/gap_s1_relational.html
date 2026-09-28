@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Relationale Entitäten: Datenbanken, Tabellen und der Hive Metastore</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Relationale Entitäten: Datenbanken, Tabellen und der Hive Metastore</h1>
+<p class="subtitle">Section 1 &middot; Databricks Intelligence Plattform &middot; Quelle: Udemy-Kursmaterial &bdquo;Relational Entities&ldquo;, erg&auml;nzt mit Databricks-Dokumentation</p>
+
+<p>Das Überblick-Kapitel dieser Section hat bereits die moderne Unity-Catalog-Hierarchie vorgestellt (Metastore &rarr; Catalog &rarr; Schema &rarr; Table/Volume). Historisch &ndash; und noch immer relevant, wenn man versteht, worauf Unity Catalog eigentlich aufsetzt &ndash; verwaltet Databricks diese Objekte über den sogenannten <strong>Hive Metastore</strong>. Dieses Kapitel erklärt die relationalen Grundbausteine (Datenbanken, Tabellen) auf dieser fundamentalen Ebene und zeigt, wie das <code>LOCATION</code>-Schlüsselwort den physischen Speicherort beeinflusst.</p>
+
+<h2>1. Datenbanken = Schemas im Hive Metastore</h2>
+<p>In Databricks ist eine <strong>Datenbank</strong> technisch identisch mit einem <strong>Schema</strong> im Hive Metastore &ndash; beide Befehle erzeugen exakt dasselbe Objekt:</p>
+<pre class="code sql">CREATE DATABASE db_name;
+-- vollkommen gleichwertig:
+CREATE SCHEMA db_name;</pre>
+<p>Der <strong>Hive Metastore</strong> ist ein zentrales Metadaten-Repository: Er speichert nicht die Daten selbst, sondern Informationen darüber &ndash; welche Datenbanken und Tabellen es gibt, deren Schema (Spaltennamen und -typen), das Speicherformat und vor allem, <em>wo</em> die zugehörigen Daten physisch liegen. Jeder Databricks-Workspace verfügt über einen zentralen Hive Metastore, auf den alle Cluster zugreifen.</p>
+
+<h2>2. Der Standard-Speicherort: dbfs:/user/hive/warehouse</h2>
+<p>Ohne weitere Angaben landen neue Tabellen in der vorhandenen Standarddatenbank <code>default</code>, und ihre Daten werden physisch unter dem Hive-Standardverzeichnis <code>dbfs:/user/hive/warehouse</code> abgelegt. Legt man eine neue, eigene Datenbank an, entsteht dafür automatisch ein Unterordner mit der Endung <code>.db</code> (zur Unterscheidung von reinen Tabellenordnern) &ndash; ebenfalls unterhalb des Standardverzeichnisses:</p>
+<pre class="code sql">CREATE SCHEMA db_x;
+
+USE db_x;
+CREATE TABLE table1 (...);
+CREATE TABLE table2 (...);
+-- Metadaten: Hive Metastore, Eintrag &quot;db_x&quot;
+-- Daten: dbfs:/user/hive/warehouse/db_x.db/table1, .../table2</pre>
+
+<figure class="img">
+<img src="assets/s1/hive_metastore_schema.png">
+<figcaption>Datenbanken werden im Hive Metastore als Metadaten-Einträge geführt; ihre Tabellendaten liegen standardmäßig als .db-Unterordner unter dbfs:/user/hive/warehouse.</figcaption>
+</figure>
+
+<h2>3. Eigene Speicherorte mit LOCATION</h2>
+<p>Eine Datenbank muss nicht zwingend unter dem Hive-Standardverzeichnis liegen. Mit dem <code>LOCATION</code>-Schlüsselwort lässt sich beim Anlegen ein beliebiger, davon unabhängiger Pfad vorgeben:</p>
+<pre class="code sql">CREATE SCHEMA db_y
+LOCATION &#x27;dbfs:/custom/path/db_y.db&#x27;;
+
+USE db_y;
+CREATE TABLE table1 (...);
+-- Metadaten weiterhin im Hive Metastore
+-- Daten diesmal unter dbfs:/custom/path/db_y.db/table1</pre>
+<p>Wichtig: Die <strong>Metadaten</strong> landen in beiden Fällen gleichermaßen im zentralen Hive Metastore &ndash; unabhängig von <code>LOCATION</code> betrifft dieses Schlüsselwort ausschließlich den physischen Ablageort der <em>Daten</em>.</p>
+
+<h2>4. Managed vs. External Tables</h2>
+<p>Dasselbe Prinzip lässt sich auch auf einzelne Tabellen anwenden &ndash; unabhängig davon, wo die umgebende Datenbank selbst liegt:</p>
+<table>
+<tr><th></th><th>Managed Table</th><th>External Table</th></tr>
+<tr><td>Erzeugung</td><td><code>CREATE TABLE table_name (...)</code> &ndash; ohne LOCATION, im Datenbankverzeichnis</td><td><code>CREATE TABLE table_name (...) LOCATION 'pfad'</code> &ndash; außerhalb des Datenbankverzeichnisses</td></tr>
+<tr><td>Verantwortung</td><td>Hive/Unity Catalog verwaltet Metadaten <strong>und</strong> Daten</td><td>Hive/Unity Catalog verwaltet <strong>nur</strong> die Metadaten</td></tr>
+<tr><td>Verhalten bei <code>DROP TABLE</code></td><td>Datendateien werden mitgelöscht</td><td>Datendateien bleiben erhalten</td></tr>
+<tr><td>Automatische Optimierung</td><td>Predictive Optimization (automatisches <code>OPTIMIZE</code>/<code>VACUUM</code>) sowie Automatic Liquid Clustering (<code>CLUSTER BY AUTO</code>) verfügbar</td><td>Nicht verfügbar &ndash; Optimierung muss manuell angestoßen werden</td></tr>
+</table>
+
+<figure class="img">
+<img src="assets/s1/managed_vs_external.png">
+<figcaption>Managed Tables liegen im Datenbankverzeichnis und werden bei DROP TABLE vollständig gelöscht; External Tables verweisen per LOCATION auf einen unabhängigen Pfad.</figcaption>
+</figure>
+
+<p>Ein oft übersehener, aber praktisch wichtiger Unterschied betrifft die automatische Wartung: <strong>Predictive Optimization</strong> &ndash; also das automatische Ausführen von <code>OPTIMIZE</code> und <code>VACUUM</code> im Hintergrund, ohne eigene Wartungsjobs planen zu müssen &ndash; sowie <strong>Automatic Liquid Clustering</strong> (<code>CLUSTER BY AUTO</code>, siehe Section 6) setzen beide eine <strong>Unity-Catalog-Managed-Table</strong> voraus. External Tables sind davon grundsätzlich ausgeschlossen, da Unity Catalog dort nur die Metadaten, nicht aber die zugrunde liegenden Dateien verwaltet und entsprechend keine automatisierten Schreiboperationen auf ihnen ausführen kann. Das ist ein weiteres gutes Argument, im Zweifel Managed statt External Tables zu verwenden.</p>
+
+<p>Eine External Table lässt sich dabei in jeder beliebigen Datenbank anlegen &ndash; auch in einer, die selbst unter einem eigenen <code>LOCATION</code>-Pfad liegt. Die Tabellendefinition erscheint stets im Hive Metastore unterhalb der gewählten Datenbank, während die Daten unabhängig davon exakt dort landen, wo <code>LOCATION</code> es vorgibt:</p>
+<pre class="code sql">USE db_x;
+CREATE TABLE table3
+LOCATION &#x27;dbfs:/some/path_2/x_table3&#x27;;
+-- Metadaten: Hive Metastore, unter db_x gelistet
+-- Daten: dbfs:/some/path_2/x_table3 (voellig unabhaengig vom db_x-Verzeichnis)</pre>
+
+<h2>5. Metadaten per SQL abfragen: INFORMATION_SCHEMA</h2>
+<p>Der Hive Metastore bzw. sein Unity-Catalog-Nachfolger speichert also Metadaten &ndash; aber wie fragt man diese Metadaten selbst per SQL ab, statt sie nur über die grafische Oberfläche zu durchsuchen? Jeder Unity-Catalog-Katalog enthält dafür automatisch ein <strong>INFORMATION_SCHEMA</strong>: eine schreibgeschützte Sammlung von Systemtabellen bzw. -Views, die genau diese Metadaten &ndash; Kataloge, Schemas, Tabellen, Spalten, Berechtigungen und mehr &ndash; als ganz normal abfragbare Tabellen bereitstellt:</p>
+<pre class="code sql">-- Alle Tabellen in einem bestimmten Schema auflisten
+SELECT table_catalog, table_schema, table_name, table_type
+FROM main.information_schema.tables
+WHERE table_schema = &#x27;default&#x27;;
+
+-- Spalten und Datentypen einer bestimmten Tabelle nachschlagen
+SELECT column_name, data_type, is_nullable
+FROM main.information_schema.columns
+WHERE table_catalog = &#x27;main&#x27; AND table_schema = &#x27;default&#x27; AND table_name = &#x27;orders&#x27;;</pre>
+<p>Ein wichtiges Detail dabei: <code>INFORMATION_SCHEMA</code> ist <strong>rechte-bewusst</strong> &ndash; jede Abfrage liefert ausschließlich die Objekte zurück, auf die die aktuell angemeldete Person tatsächlich Zugriffsrechte besitzt. Das macht es zum idealen Werkzeug, um programmatisch (z. B. aus einem Governance-Dashboard heraus) zu prüfen, welche Tabellen und Spalten überhaupt existieren, ohne dafür erhöhte Rechte zu benötigen.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Mit Unity Catalog wird das Grundkonzept um eine zusätzliche Hierarchieebene erweitert (<code>catalog.schema.table</code> statt nur <code>schema.table</code>) und der Hive Metastore durch den zentralen, kontenweiten Unity-Catalog-Metastore abgelöst &ndash; das Grundprinzip von Managed vs. External Tables sowie die Bedeutung von <code>LOCATION</code> bleiben dabei inhaltlich unverändert. Für <code>INFORMATION_SCHEMA</code>-Abfragen empfiehlt Databricks, stets selektive Filter wie <code>WHERE table_catalog = '...' AND table_schema = '...'</code> zu setzen, um Timeouts bei sehr vielen Objekten zu vermeiden; außerdem werden alle Bezeichner (außer Spalten- und Tag-Namen) intern kleingeschrieben gespeichert, weshalb Vergleiche direkt in Kleinschreibung erfolgen sollten statt über <code>LOWER()</code>/<code>UPPER()</code>-Funktionen. Details zu den Zugriffsrechten (GRANT/REVOKE/DENY) und zur gezielten Konvertierung zwischen Managed und External unter Unity Catalog behandelt <strong>Section 7</strong> dieser Dokumentation.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/tables/types">Unity Catalog table types</a> &middot; <a href="https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-information-schema">Information schema &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

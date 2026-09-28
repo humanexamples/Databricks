@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Grundlagen: Jobs, Tasks und Komponenten</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Grundlagen: Jobs, Tasks und Komponenten</h1>
+<p class="subtitle">Section 4 &middot; Working with Lakeflow Jobs &middot; Quelle: Kurs 2, Kapitel 2&ndash;4</p>
+
+<p>Sobald Daten in Databricks aufgenommen und transformiert werden sollen, braucht es eine Instanz, die diese Arbeitsschritte zuverlässig plant, ausführt und überwacht. Genau das leistet <strong>Lakeflow Jobs</strong> &ndash; die Orchestrierungskomponente von Lakeflow. Sie ist das Bindeglied zwischen einzelnen Notebooks, SQL-Abfragen oder Pipelines und einem verlässlichen, automatisierten Produktivbetrieb. Dieses Dokument erklärt die Grundbausteine: <strong>Jobs</strong>, <strong>Tasks</strong> und deren Anordnung als <strong>DAG</strong> (Directed Acyclic Graph).</p>
+
+<h2>1. Jobs und Tasks: eine hierarchische Beziehung</h2>
+<p>Ein <strong>Job</strong> ist die übergeordnete Ressource in Databricks, mit der Datenverarbeitung, ETL-Läufe, Analysen oder Machine-Learning-Workloads geplant, koordiniert und ausgeführt werden. Ein Job besteht aus einem oder mehreren <strong>Tasks</strong> &ndash; das sind die eigentlichen Arbeitseinheiten, die jeweils eine konkrete Aufgabe übernehmen, zum Beispiel das Ausführen eines Notebooks, eines Skripts oder einer SQL-Abfrage. Diese Beziehung ist hierarchisch: Ein Job ist der Container, die Tasks darin sind die Bausteine, die die eigentliche Arbeit verrichten.</p>
+
+<figure class="img">
+<img src="assets/02/jobs_tasks_overview.png">
+<figcaption>Ein Job kann aus einem oder mehreren Tasks bestehen, die gemeinsam einen Workflow bilden.</figcaption>
+</figure>
+
+<h2>2. Task-Typen und unterstützte Sprachen</h2>
+<p>Für jeden Task lässt sich der passende Task-Typ wählen. Databricks unterstützt unter anderem folgende Typen:</p>
+<ul>
+<li><strong>Notebook</strong> &ndash; führt ein Databricks-Notebook in Python, SQL, Scala oder R aus.</li>
+<li><strong>SQL</strong> &ndash; führt eine SQL-Datei oder eine gespeicherte Abfrage auf einem SQL-Warehouse aus.</li>
+<li><strong>Pipeline</strong> &ndash; startet eine deklarative Lakeflow-Pipeline (Streaming Tables/Materialized Views).</li>
+<li><strong>Python-Skript / Python-Wheel</strong> &ndash; führt eigenständigen bzw. paketierten Python-Code aus.</li>
+<li><strong>dbt</strong>, <strong>JAR (Java)</strong>, <strong>Spark Submit</strong>, <strong>AI/BI-Dashboard</strong> und weitere Typen für Legacy- oder BI-Anwendungsfälle.</li>
+</ul>
+<p>Diese Vielfalt erlaubt es, praktisch jede Art von Workload innerhalb eines einzigen Jobs zu orchestrieren &ndash; unabhängig davon, in welcher Sprache oder mit welchem Werkzeug ein Team arbeitet. Jeder Task-Typ bringt eigene Konfigurationsoptionen mit: Pfad zum Code, benötigte Bibliotheken, Parameter, Benachrichtigungen und Retry-Verhalten lassen sich pro Task individuell einstellen.</p>
+
+<h2>3. Rechenressourcen (Compute) pro Task</h2>
+<p>Ein wichtiges Prinzip: Jeder Task in einem Job kann seine eigene Recheninstanz zugewiesen bekommen. Tasks im selben Job können dieselbe Compute-Ressource teilen oder unterschiedliche verwenden &ndash; etwa Task&nbsp;1 auf einem All-Purpose-Cluster, Task&nbsp;2 auf Serverless und Task&nbsp;3 auf einem dedizierten Job-Cluster. Diese Flexibilität erlaubt es, Performance und Kosten für jeden einzelnen Task gezielt zu optimieren, statt den gesamten Job auf eine einzige Kompromisslösung festzulegen.</p>
+<p>Zur Auswahl stehen im Wesentlichen vier Compute-Kategorien:</p>
+<ul>
+<li><strong>Interactive Clusters</strong> &ndash; von mehreren Nutzern gemeinsam verwendete Cluster, gut für Exploration, aber in Produktion nicht kosteneffizient, da sie auch im Leerlauf weiterlaufen.</li>
+<li><strong>Job Clusters</strong> &ndash; werden für den Job erzeugt und nach dessen Ende automatisch beendet; dadurch spürbar günstiger, aber mit Cloud-seitiger Startzeit verbunden.</li>
+<li><strong>Serverless</strong> &ndash; vollständig verwalteter Dienst ohne eigene Cluster-Administration, mit schnellerem Start und automatischer Skalierung.</li>
+<li><strong>SQL-Warehouse</strong> &ndash; speziell für SQL-Abfragen, Dashboards und BI-Workloads optimiert, standardmäßig serverless mit automatischem Start/Stop.</li>
+</ul>
+
+<h2>4. Orchestrierung als DAG</h2>
+<p>Databricks stellt die Abhängigkeiten zwischen Tasks als <strong>Directed Acyclic Graph (DAG)</strong> dar &ndash; ein <em>gerichteter, azyklischer Graph</em>: gerichtet, weil jede Verbindung eine eindeutige Ausführungsrichtung hat, und azyklisch, weil es keine Rückkopplungen (Zyklen) gibt. Ein einfaches Beispiel: Task&nbsp;1 muss abgeschlossen sein, bevor Task&nbsp;2 und Task&nbsp;3 parallel starten können. Diese Abhängigkeiten werden über die <strong>Depends&nbsp;on</strong>-Einstellung jedes Tasks konfiguriert und lassen sich über UI, REST-API, SDK oder Databricks Asset Bundles definieren.</p>
+
+<figure class="img">
+<img src="assets/02/task_DAG.png">
+<figcaption>Ein einfacher DAG: Task 1 ist Voraussetzung für Task 2 und Task 3.</figcaption>
+</figure>
+
+<h2>5. Typische Orchestrierungsmuster</h2>
+<p>In der Praxis lassen sich die meisten Workflows auf drei wiederkehrende Muster zurückführen:</p>
+<table>
+<tr><th>Muster</th><th>Beschreibung</th><th>Typischer Anwendungsfall</th></tr>
+<tr><td><strong>Sequenz</strong></td><td>Tasks laufen strikt nacheinander ab.</td><td>Bronze &rarr; Silver &rarr; Gold in der Medallion-Architektur</td></tr>
+<tr><td><strong>Trichter (Funnel)</strong></td><td>Mehrere Tasks laufen parallel und münden in einen gemeinsamen Folge-Task.</td><td>Mehrere Datenquellen werden zusammengeführt</td></tr>
+<tr><td><strong>Fächer (Fan-out)</strong></td><td>Ein Task verzweigt in mehrere parallele Folge-Tasks.</td><td>Eine Quelle wird an mehrere nachgelagerte Systeme verteilt</td></tr>
+</table>
+
+<h2>6. Ein Job in der Praxis: Notebook- und SQL-Task kombiniert</h2>
+<p>Ein typischer Einstieg besteht darin, einen Job mit zwei Tasks anzulegen: einem Notebook-Task, der Rohdaten in eine Bronze-Tabelle lädt, und einem SQL-Task, der eine weitere Tabelle aus einer SQL-Datei heraus befüllt. Beide Tasks lassen sich unabhängig voneinander konfigurieren (Pfad, Compute, Parameter) und anschließend über <strong>Run now</strong> gemeinsam starten. Nach dem Lauf zeigt die <strong>Runs</strong>-Ansicht den Fortschritt farbcodiert an:</p>
+<ul>
+<li><strong>Grün</strong> &ndash; Task erfolgreich abgeschlossen</li>
+<li><strong>Rot</strong> &ndash; Task fehlgeschlagen</li>
+<li><strong>Gelb</strong> &ndash; wartend oder in Wiederholung (Retry)</li>
+<li><strong>Grau</strong> &ndash; noch nicht gestartet, abgebrochen oder Timeout</li>
+</ul>
+<p>Das folgende Beispiel zeigt, wie sich die per Job-Task erzeugten Tabellen anschließend ganz normal per SQL abfragen lassen:</p>
+
+<pre class="code sql">-- Ergebnis des Notebook-Tasks pruefen
+SELECT *
+FROM orders_bronze
+LIMIT 50;
+
+-- Ergebnis des SQL-Tasks pruefen
+SELECT *
+FROM sales_bronze
+LIMIT 5;</pre>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Lakeflow Jobs ist die aktuelle Bezeichnung für die frühere Orchestrierungskomponente &bdquo;Databricks Workflows&ldquo; und bleibt inhaltlich weitgehend identisch. Die Tasks eines Jobs werden als DAG dargestellt und lassen sich über die Job-UI, die REST-API, das SDK oder Databricks Asset Bundles definieren. Neben Notebook-, SQL- und Pipeline-Tasks führt die Dokumentation unter anderem Python-Skript-Tasks auf; die vollständige Liste aller unterstützten Task-Typen findet sich im Abschnitt &bdquo;Types of tasks&ldquo; der Referenzdokumentation.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/jobs/control-flow">Control the flow of tasks within Lakeflow Jobs &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

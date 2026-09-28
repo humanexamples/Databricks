@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Multi-Flow-Pipelines & Liquid Clustering</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Multi-Flow-Pipelines & Liquid Clustering</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: Kurs 5, Kapitel 1&ndash;2</p>
+
+<p>Bisher kannte man aus den Grundlagen einer Lakeflow Declarative Pipeline vor allem den einfachen Fall: Eine Streaming Table oder Materialized View wird mit genau einer <code>SELECT</code>-Abfrage aus genau einer Quelle befüllt. Sobald mehrere Quellen in ein gemeinsames Ziel einfließen sollen &ndash; etwa Bestelldaten dreier Tochtergesellschaften, die jeweils in unterschiedlichen Formaten abgelegt werden &ndash; reicht dieses einfache Modell nicht mehr aus. Genau hier setzt das Konzept des <strong>Flows</strong> an, das in fortgeschrittenen Pipelines zum zentralen Baustein wird.</p>
+
+<h2>1. Flow = Query + Target</h2>
+<p>Ein <strong>Flow</strong> ist die kleinste Ausführungseinheit einer Deklarativen Pipeline. Er besteht immer aus zwei Teilen: einer <strong>Query</strong> (der SQL- oder DataFrame-Logik, die bestimmt, welche Daten gelesen und wie sie transformiert werden) und einem <strong>Target</strong> (der Streaming Table oder Materialized View, in die das Ergebnis geschrieben wird). Jeder Flow verwaltet dabei seinen eigenen <strong>Checkpoint</strong>, über den der Fortschritt der inkrementellen Verarbeitung nachverfolgt wird. Wird ein Flow umbenannt, verliert er seinen Checkpoint und beginnt beim nächsten Lauf wieder von vorne &ndash; ein Detail, das bei Refactorings leicht übersehen wird, aber in der Produktion teuer werden kann.</p>
+
+<p>Meistens entsteht ein Flow implizit, sobald eine Streaming Table oder Materialized View definiert wird &ndash; man spricht dann von einem <strong>Default Flow</strong>, der automatisch den Namen seiner Zieltabelle erbt. Wird hingegen zusätzlicher Schreibzugriff auf eine bereits bestehende Tabelle benötigt, etwa weil eine zweite Quelle angebunden werden soll, definiert man einen <strong>expliziten Flow</strong> separat mit <code>CREATE FLOW</code>. Beide Varianten laufen unabhängig voneinander: Ein langsamer oder fehlgeschlagener Flow beeinflusst die übrigen Flows im selben Pipeline-Lauf nicht.</p>
+
+<pre class="code sql">-- Default Flow: Tabelle und Flow entstehen in einem Schritt
+CREATE OR REFRESH STREAMING TABLE target_table
+AS SELECT * FROM STREAM source_table;
+
+-- Expliziter Flow: Tabelle wird separat definiert,
+-- der Flow schreibt anschließend gezielt hinein
+CREATE OR REFRESH STREAMING TABLE target_table;
+
+CREATE FLOW my_flow
+AS INSERT INTO target_table BY NAME
+SELECT * FROM STREAM source_table;</pre>
+
+<h2>2. Das Multi-Flow-Muster: mehrere Quellen, ein Ziel</h2>
+<p>Sollen mehrere Datenquellen in dieselbe Tabelle einfließen, lassen sich beliebig viele explizite Flows auf dasselbe Target richten. Jeder Flow liest unabhängig von seiner eigenen Quelle, verarbeitet die Daten und hängt sie an die gemeinsame Zieltabelle an. Das folgende Beispiel aus der Demo-Pipeline zeigt drei Tochtergesellschaften (Bright Home, Lumina Sports, Northstar Outfitters), die jeweils eigene CSV- bzw. JSON-Dateien liefern, aber gemeinsam in eine einzige Bronze-Tabelle einfließen:</p>
+
+<pre class="code sql">CREATE OR REPLACE STREAMING TABLE multi_flow_1_bronze.orders_bronze_flows_demo
+(
+  subsidiary_id   STRING,
+  order_id        STRING,
+  order_timestamp STRING,
+  customer_id     STRING,
+  region          STRING,
+  country         STRING,
+  city            STRING,
+  channel         STRING,
+  sku             STRING,
+  category        STRING,
+  qty             STRING,
+  unit_price      STRING,
+  discount_pct    STRING,
+  coupon_code     STRING,
+  total_amount    STRING,
+  order_date      STRING,
+  source_file     STRING,
+  file_mod_time   TIMESTAMP
+)
+COMMENT &quot;Creates a single bronze streaming table with orders from all subsidiaries using multiple flows.&quot;
+TBLPROPERTIES (
+  &#x27;pipelines.reset.allowed&#x27; = false
+);
+
+-- Flow 1: liest CSV-Dateien der Bright-Home-Volume
+CREATE FLOW bright_home_orders_flow
+AS INSERT INTO multi_flow_1_bronze.orders_bronze_flows_demo BY NAME
+SELECT
+  CAST(subsidiary_id AS STRING) AS subsidiary_id,
+  CAST(order_id AS STRING) AS order_id,
+  -- ... weitere Spalten, alle als STRING gecastet ...
+  _metadata.file_name AS source_file,
+  _metadata.file_modification_time AS file_mod_time
+FROM STREAM read_files(
+    &#x27;${bright_home_orders_source}&#x27;,
+    format =&gt; &#x27;csv&#x27;,
+    header =&gt; true
+);
+
+-- Flow 2: liest CSV-Dateien der Lumina-Sports-Volume (identisches Zielschema)
+CREATE FLOW lumina_sports_orders_flow
+AS INSERT INTO multi_flow_1_bronze.orders_bronze_flows_demo BY NAME
+SELECT ... FROM STREAM read_files(&#x27;${lumina_sports_orders_source}&#x27;, format =&gt; &#x27;csv&#x27;, header =&gt; true);
+
+-- Flow 3: liest JSON-Dateien der Northstar-Outfitters-Volume
+CREATE FLOW northstar_outfitters_orders_flow
+AS INSERT INTO multi_flow_1_bronze.orders_bronze_flows_demo BY NAME
+SELECT ... FROM STREAM read_files(&#x27;${northstar_outfitters_orders_source}&#x27;, format =&gt; &#x27;json&#x27;);</pre>
+
+<p>Bemerkenswert ist die Tabelleneigenschaft <code>'pipelines.reset.allowed' = false</code>: Sie verhindert, dass ein versehentlicher Full Refresh die gesamte Bronze-Tabelle löscht &ndash; wichtig, weil hier Daten aus drei unabhängigen Quellen zusammenlaufen, die im Zweifel einzeln neu geladen werden müssten. Alle drei Flows casten sämtliche Geschäftsspalten konsequent auf <code>STRING</code>, damit unterschiedliche Quellformate keine Typkonflikte erzeugen &ndash; die eigentliche Typisierung erfolgt erst später in der Silver-Schicht.</p>
+
+<figure class="img">
+<img src="assets/04/multi_flow_pipeline_overview.png">
+<figcaption>Drei unabhängige Flows schreiben aus unterschiedlichen Quell-Volumes in dieselbe Bronze-Tabelle; erst danach folgen Liquid Clustering in der Silver-Schicht und aggregierende Gold-Materialized-Views.</figcaption>
+</figure>
+
+<h2>3. Warum Multi-Flow und nicht UNION?</h2>
+<p>Eine naheliegende Alternative wäre, die drei Quellen einfach per <code>UNION ALL</code> innerhalb einer einzigen Streaming-Table-Definition zusammenzuführen. Für inkrementelle Pipelines bringt das jedoch entscheidende Nachteile mit sich: Alle Quellen teilen sich dann einen einzigen Checkpoint, sodass das Hinzufügen einer vierten Tochtergesellschaft einen kompletten Full Refresh der gesamten Tabelle erzwingt. Zudem kann ein Fehler in einer Quelle den gesamten Ladevorgang blockieren, und die Nachverfolgung, welche Zeile aus welcher Quelle stammt, wird unübersichtlich. Das Multi-Flow-Muster löst all diese Probleme: Jeder Flow besitzt einen eigenen Checkpoint, neue Quellen lassen sich ohne Neuverarbeitung der Historie ergänzen, und Fehler bleiben auf den jeweiligen Flow beschränkt. Aus diesem Grund gilt Multi-Flow bei mehreren Quellen mit identischem Zielschema als die empfohlene Vorgehensweise gegenüber <code>UNION</code>.</p>
+
+<p>Eine wichtige Einschränkung dabei: <strong>Data-Quality-Expectations</strong> (siehe Kapitel 3 und Kapitel 9 dieser Section) lassen sich nicht auf einzelnen Flows definieren, sondern ausschließlich auf der Zieltabelle selbst. Dadurch gelten dieselben Qualitätsregeln automatisch für alle Flows, die in diese Tabelle schreiben &ndash; unabhängig davon, aus welcher Quelle die jeweilige Zeile stammt.</p>
+
+<h2>4. Liquid Clustering im Pipeline-Kontext</h2>
+<p>Nachdem die Bronze-Tabelle die Rohdaten aus allen Flows vereint, folgt in der Silver-Schicht typischerweise eine Bereinigung samt Typisierung. An dieser Stelle lohnt sich häufig auch die Aktivierung von <strong>Liquid Clustering</strong> &ndash; dem modernen Nachfolger von Hive-Partitionierung und Z-Ordering, der in Section 6 (Troubleshooting, Monitoring and Optimization) ausführlich behandelt wird. Im Pipeline-Kontext genügt die Klausel <code>CLUSTER BY AUTO</code> direkt in der Tabellendefinition, damit Databricks anhand der tatsächlichen Abfragemuster selbstständig geeignete Clustering-Spalten wählt und die Datenlayout-Optimierung inkrementell im Hintergrund ausführt &ndash; ganz ohne manuelles <code>OPTIMIZE</code>.</p>
+
+<pre class="code sql">CREATE OR REFRESH STREAMING TABLE multi_flow_2_silver.orders_silver_flows_demo
+(
+  subsidiary_id   STRING,
+  order_id        STRING,
+  order_timestamp TIMESTAMP,
+  order_date      DATE,
+  -- ... weitere Spalten ...
+  CONSTRAINT qty_valid          EXPECT (qty &gt;= 0) ON VIOLATION DROP ROW,
+  CONSTRAINT total_amount_valid EXPECT (total_amount &gt;= 0) ON VIOLATION DROP ROW,
+  CONSTRAINT timestamp_not_null EXPECT (order_timestamp IS NOT NULL) ON VIOLATION FAIL UPDATE
+)
+COMMENT &#x27;Clean and standardize data from the multiple-flow bronze table&#x27;
+
+-- Liquid Clustering: Databricks wählt die Clustering-Spalten selbst
+CLUSTER BY AUTO
+
+AS
+SELECT
+  subsidiary_id,
+  order_id,
+  TRY_CAST(order_timestamp AS TIMESTAMP) AS order_timestamp,
+  TRY_CAST(order_date      AS DATE)      AS order_date,
+  -- ... TRY_CAST für alle numerischen Spalten ...
+FROM STREAM multi_flow_1_bronze.orders_bronze_flows_demo;</pre>
+
+<p>Alternativ lassen sich mit <code>CLUSTER BY (spalte1, spalte2)</code> auch explizite Clustering-Schlüssel angeben, wenn die typischen Filterspalten bereits bekannt sind &ndash; etwa <code>region</code> und <code>order_date</code> bei regelmäßigen Auswertungen nach Zeitraum und Vertriebsregion. Ein Hybrid ist ebenfalls möglich: explizite Spalten als Startpunkt, während <code>clusterByAuto</code> zusätzlich aktiviert bleibt, damit sich das Layout mit der Zeit weiterentwickelt.</p>
+
+<table>
+<tr><th>Ansatz</th><th>Wann sinnvoll</th></tr>
+<tr><td><code>CLUSTER BY AUTO</code></td><td>Neue Tabellen oder unklare Abfragemuster &ndash; Databricks lernt aus der Query-Historie</td></tr>
+<tr><td><code>CLUSTER BY (spalten)</code></td><td>Bekannte, stabile Filterspalten &ndash; volle Kontrolle über das Datenlayout</td></tr>
+<tr><td>Hive-Partitionierung (Legacy)</td><td>Nur noch für Sonderfälle wie DSGVO-Löschungen relevant, siehe Section 6</td></tr>
+</table>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Automatic Liquid Clustering wird inzwischen sowohl für Materialized Views als auch für Streaming Tables in Lakeflow Declarative Pipelines unterstützt. Databricks analysiert dabei die tatsächliche Abfrage-Historie einer Tabelle, um passende Clustering-Spalten vorzuschlagen, passt die Auswahl bei sich ändernden Zugriffsmustern automatisch an und ändert die Schlüssel nur dann, wenn der erwartete Performance-Gewinn die Kosten der Neusortierung übersteigt. Voraussetzung für die automatische Schlüsselwahl ist, dass Predictive Optimization für die Tabelle aktiviert ist; Clustering-Vorgänge laufen dabei grundsätzlich asynchron im Hintergrund.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/tables/clustering">Use liquid clustering for tables &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Bedingte und iterative Tasks (Run If, For Each)</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Bedingte und iterative Tasks (Run If, For Each)</h1>
+<p class="subtitle">Section 4 &middot; Working with Lakeflow Jobs &middot; Quelle: Kurs 2, Kapitel 8&ndash;10</p>
+
+<p>Nicht jeder Workflow lässt sich als starre Abfolge von Tasks abbilden. Manchmal soll ein Task nur laufen, wenn ein bestimmtes Ergebnis vorliegt; manchmal muss dieselbe Logik auf eine unbekannte Anzahl von Eingabewerten angewendet werden. Für solche Fälle bietet Lakeflow Jobs drei fortgeschrittene Task-Muster: <strong>Run-if-Abhängigkeiten</strong>, <strong>If/Else-Tasks</strong> und <strong>For-Each-Tasks</strong>. Zusammen erlauben sie dynamische Workflows, die auf Laufzeitbedingungen reagieren, statt starr vorgegeben zu sein.</p>
+
+<h2>1. Run-if-Abhängigkeiten (Run If Conditions)</h2>
+<p>Standardmäßig wartet ein Task, bis alle vorgelagerten Tasks erfolgreich abgeschlossen sind (&bdquo;All succeeded&ldquo;). Für robustere Workflows lässt sich diese Bedingung jedoch feiner steuern:</p>
+<ul>
+<li><strong>All succeeded</strong> &ndash; alle Vorgänger-Tasks müssen erfolgreich sein (Standardverhalten).</li>
+<li><strong>At least one succeeded</strong> &ndash; sinnvoll bei redundanten Datenquellen oder Verarbeitungspfaden; der Workflow läuft weiter, sobald mindestens ein Vorgänger erfolgreich war.</li>
+<li><strong>None failed</strong> &ndash; erlaubt Ausführung auch dann, wenn Vorgänger-Tasks übersprungen wurden, solange keiner davon explizit fehlgeschlagen ist.</li>
+<li><strong>All done</strong> &ndash; läuft, sobald alle Vorgänger-Tasks abgeschlossen sind, unabhängig von deren Ergebnis.</li>
+<li><strong>At least one failed</strong> &ndash; läuft, sobald mindestens ein Vorgänger fehlgeschlagen ist &ndash; nützlich etwa für Aufräum- oder Benachrichtigungs-Tasks.</li>
+<li><strong>All failed</strong> &ndash; läuft nur, wenn alle Vorgänger-Tasks fehlgeschlagen sind.</li>
+</ul>
+<p>Das sind die sechs festen, in der UI/API vorgegebenen Optionen &ndash; eine frei definierbare, benutzerdefinierte Bedingung gibt es nicht.</p>
+<p>Diese Bedingungen erhöhen die Ausfallsicherheit eines Workflows deutlich: Ist ein Task etwa so konfiguriert, dass er läuft, sobald mindestens einer von zwei Vorgängern erfolgreich war, kann er trotzdem starten, wenn einer der beiden Vorgänger fehlschlägt. Das verhindert Kaskadenausfälle und spiegelt reale Geschäftsprozesse wider, bei denen es oft mehrere gültige Wege zum Ziel gibt.</p>
+
+<figure class="img">
+<img src="assets/02/run_if_dag_visualization.png">
+<figcaption>Unterschiedliche Run-if-Bedingungen werden im Job-DAG durch verschiedene Linienstile visualisiert.</figcaption>
+</figure>
+
+<h2>2. If/Else-Tasks</h2>
+<p>Während Run-if-Bedingungen nur den <em>Status</em> vorheriger Tasks berücksichtigen, ermöglichen <strong>If/Else-Tasks</strong> echte boolesche Logik basierend auf Daten, Parametern oder berechneten Kennzahlen. Unterstützt werden die Operatoren <code>==</code>, <code>!=</code>, <code>&gt;</code>, <code>&gt;=</code>, <code>&lt;</code> und <code>&lt;=</code>. Typische Anwendungsfälle sind Datenqualitäts-Gates (Verzweigung je nach Datensatzanzahl oder Null-Anteil), unterschiedliche Verarbeitungsstrategien je nach Datenvolumen oder umgebungsabhängige Logik (Dev/Stage/Prod). Jeder der beiden Zweige &ndash; <strong>True</strong> und <strong>False</strong> &ndash; kann beliebig viele eigene Folge-Tasks enthalten.</p>
+<p>Ein konkretes Beispiel aus der Praxis: Ein vorgelagerter Task prüft eine Tabelle auf doppelte Datensätze und speichert das Ergebnis als Task Value.</p>
+
+<pre class="code python"># Im vorgelagerten Task: Duplikate pruefen und Ergebnis als Task Value speichern
+df = spark.sql(&quot;SELECT * FROM customers_sales_silver&quot;)
+duplicate_exists = df.count() &gt; df.dropDuplicates().count()
+dbutils.jobs.taskValues.set(key=&quot;has_duplicates&quot;, value=duplicate_exists)</pre>
+
+<p>Der If/Else-Task greift anschließend über eine dynamische Wertreferenz auf dieses Ergebnis zu und prüft die Bedingung <code>tasks.customers_sales_summary.values.has_duplicates == true</code>. Ist die Bedingung wahr, läuft der Zweig, der Duplikate bereinigt; andernfalls läuft direkt die Transformation ohne Bereinigungsschritt.</p>
+
+<h2>3. For-Each-Tasks: iterative Verarbeitung</h2>
+<p>Ein <strong>For-Each-Task</strong> wiederholt dieselbe Logik für jedes Element einer Eingabeliste &ndash; etwa für jeden Bundesstaat, jede Kundengruppe oder jede zu verarbeitende Datei. Er besteht aus zwei Bausteinen:</p>
+<ul>
+<li><strong>Der For-Each-Container</strong> &ndash; verwaltet die Iterationslogik, die Eingabeliste (<code>Inputs</code>) und die Nebenläufigkeit (<code>Concurrency</code>), also wie viele Iterationen parallel laufen dürfen.</li>
+<li><strong>Der verschachtelte (nested) Task</strong> &ndash; die eigentliche Arbeit, die pro Iteration ausgeführt wird. Er kann ein beliebiger Task-Typ sein (Notebook, SQL, Python) und erhält das jeweilige Listenelement über die Referenz <code>{{input}}</code>.</li>
+</ul>
+<p>Downstream-Tasks hängen dabei nur vom gesamten For-Each-Container ab, nicht von jeder einzelnen Iteration &ndash; das hält den DAG übersichtlich, auch wenn im Hintergrund Dutzende Iterationen laufen. Ein Beispiel: Aus einer Tabelle mit Bestelldaten sollen separate Auswertungstabellen für die Bundesstaaten Kalifornien, New York und Virginia erzeugt werden, jeweils mit demselben Notebook, aber unterschiedlichem Parameterwert:</p>
+
+<pre class="code python"># Konfiguration des For-Each-Containers (vereinfachtes Beispiel)
+# Inputs:      [&quot;CA&quot;, &quot;NY&quot;, &quot;VA&quot;]
+# Nested Task: Notebook &quot;9.5 - For Each: Customer orders State&quot;
+# Parameter:   state = {{input}}   -&gt; wird pro Iteration automatisch befuellt</pre>
+
+<figure class="img">
+<img src="assets/02/for_each_task_loop_diagram.png">
+<figcaption>Der For-Each-Task durchläuft eine Eingabeliste und führt für jedes Element den verschachtelten Task aus.</figcaption>
+</figure>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks führt diese drei Muster unter dem Oberbegriff &bdquo;Control the flow of tasks&ldquo; zusammen. Run-if-Bedingungen sind dabei <strong>kein eigener Task-Typ</strong>, sondern eine Einstellung an der Abhängigkeit (&bdquo;Depends on&ldquo;) eines Tasks zu seinen Vorgängern; If/Else-Tasks werden dagegen über einen eigenständigen Task-Typ mit boolescher Ausdrucksauswertung konfiguriert. Für For-Each-Tasks unterstützt die aktuelle API mehrere Methoden zur Parameterübergabe an den verschachtelten Task, nicht nur die einfache <code>{{input}}</code>-Referenz.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/jobs/control-flow">Control the flow of tasks within Lakeflow Jobs &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

@@ -1,0 +1,4 @@
+EmployeeID,FirstName,Country,Department,Salary,HireDate,Operation,ProcessDate
+8,Panagiotis,Gr,Enablement,90000.0,2025-07-01,new,2025-07-22
+6,,,,,,delete,2025-07-22
+2,,,,,,delete,2025-07-22

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Erweiterte Datenqualitätsprüfungen & Quarantäne-Muster</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Erweiterte Datenqualitätsprüfungen & Quarantäne-Muster</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: Kurs 5, Kapitel 7&ndash;8</p>
+
+<p>Kapitel 3 dieser Section hat die drei Verletzungsaktionen von Expectations &ndash; <code>WARN</code>, <code>DROP ROW</code> und <code>FAIL UPDATE</code> &ndash; anhand einfacher <code>NOT NULL</code>-Prüfungen eingeführt. In produktiven Pipelines reicht das jedoch selten aus: Ein Feld kann vorhanden und trotzdem inhaltlich falsch sein, Regeln müssen sich über mehrere Tabellen hinweg prüfen lassen, und jede gelöschte Zeile bedeutet einen unwiderruflichen Datenverlust ohne Audit-Spur. Dieses Kapitel zeigt, wie sich Expectations für den produktiven Einsatz härten lassen &ndash; und stellt mit dem <strong>Quarantäne-Muster</strong> eine Alternative zu <code>DROP ROW</code> vor, bei der keine einzige Zeile verloren geht.</p>
+
+<h2>1. Wo einfache NOT-NULL-Prüfungen an ihre Grenzen stoßen</h2>
+<p>Eine <code>NOT NULL</code>-Prüfung bestätigt lediglich, dass ein Wert <em>vorhanden</em> ist &ndash; nicht, dass er <em>korrekt</em> ist. Ein <code>discount_pct</code>-Feld mit dem Wert <code>120</code> besteht jede <code>NOT NULL</code>-Prüfung anstandslos, obwohl ein Rabatt von 120&nbsp;% offensichtlich unmöglich ist und nachgelagerte Umsatzberechnungen verfälscht. Ähnliche Lücken entstehen bei numerischen Ausreißern (negative Mengen), zeitlichen Inkonsistenzen (Datumswerte aus der Systemvergangenheit), Wertebereichsverletzungen sowie bei Feldern, die zwar optional sein dürfen, aber &ndash; wenn vorhanden &ndash; bestimmten Regeln genügen müssen. Für all diese Fälle braucht es Ausdrücke, die über eine reine Präsenzprüfung hinausgehen.</p>
+
+<h2>2. Cross-Table-Expectations: Prüfungen über Tabellengrenzen hinweg</h2>
+<p>Expectations sind nicht auf Prüfungen innerhalb einer einzelnen Zeile beschränkt. Da eine Expectation letztlich ein SQL-Boolean-Ausdruck ist, lässt sich damit auch das Ergebnis einer Materialized View prüfen, die selbst mehrere Tabellen miteinander vergleicht. Zwei Muster sind besonders verbreitet: die <strong>Row-Count-Validierung</strong>, die nach Joins oder Aggregationen sicherstellt, dass keine Zeilen unbemerkt verloren gegangen sind, und die Prüfung auf <strong>Primärschlüssel-Eindeutigkeit</strong>, die doppelte Schlüssel aufdeckt, bevor sie nachgelagerte Joins verfälschen:</p>
+
+<pre class="code sql">-- Row-Count-Validierung: stimmen die Zeilenzahlen zweier Tabellen überein?
+CREATE OR REFRESH MATERIALIZED VIEW count_verification (
+  CONSTRAINT no_rows_dropped EXPECT (a_count == b_count)
+    ON VIOLATION FAIL UPDATE
+)
+AS SELECT * FROM
+  (SELECT COUNT(*) AS a_count FROM table_a),
+  (SELECT COUNT(*) AS b_count FROM table_b)
+
+-- Primärschlüssel-Eindeutigkeit: darf jeder Schlüssel nur einmal vorkommen?
+CREATE OR REFRESH MATERIALIZED VIEW report_pk_tests (
+  CONSTRAINT unique_pk EXPECT (num_entries = 1)
+    ON VIOLATION FAIL UPDATE
+)
+AS SELECT pk, COUNT(*) AS num_entries
+FROM report
+GROUP BY pk</pre>
+
+<p>Ein weiterer wichtiger Punkt bei der Formulierung von Regeln: SQL wertet <code>NULL</code> in einem Vergleich als <em>nicht wahr</em> &ndash; nicht als falsch, aber eben auch nicht als bestanden. Eine naive Bereichsprüfung wie <code>discount_rate &gt;= 0 AND discount_rate &lt;= 100</code> markiert dadurch jeden <code>NULL</code>-Wert fälschlich als Verstoß, etwa wenn nach einer Schema-Erweiterung alle historischen Zeilen für die neue Spalte <code>NULL</code> enthalten. Die Lösung ist eine NULL-tolerante Formulierung mit <code>CASE WHEN</code>, die eine Regel nur dann anwendet, wenn der Wert tatsächlich vorhanden ist:</p>
+
+<pre class="code sql">-- NULL-tolerant: prüft nur, wenn ein Wert vorhanden ist
+CONSTRAINT valid_discount
+EXPECT (
+  CASE
+    WHEN discount_rate IS NOT NULL
+    THEN discount_rate &gt;= 0 AND discount_rate &lt;= 100
+    ELSE TRUE   -- NULL wird akzeptiert
+  END
+)</pre>
+
+<h2>3. Robuste Bronze-Schicht: STRING-Ingest plus TRY_CAST</h2>
+<p>Die widerstandsfähigste Bronze-Schicht lehnt niemals einen Datensatz wegen eines Typkonflikts ab. Werden alle eingehenden Felder zunächst als <code>STRING</code> gespeichert, akzeptiert die Pipeline, was die Quelle auch immer liefert &ndash; ob Ganzzahl, Dezimalzahl oder inkonsistent formatiert &ndash; und verschiebt die eigentliche Typdurchsetzung in die Silver-Schicht, wo <code>TRY_CAST</code> bei einem fehlgeschlagenen Cast einfach <code>NULL</code> zurückgibt, statt die gesamte Pipeline zu stoppen. Genau dieses Muster verwendet die Demo-Pipeline in der Bronze-Schicht:</p>
+
+<pre class="code sql">CREATE OR REFRESH STREAMING TABLE dq_1_bronze.sales_bronze_raw_demo
+AS
+SELECT
+  CAST(subsidiary_id AS STRING) AS subsidiary_id,
+  CAST(order_id AS STRING) AS order_id,
+  CAST(qty AS STRING) AS qty,
+  CAST(unit_price AS STRING) AS unit_price,
+  -- Neue Spalten für Schema-Evolution (zunächst NULL)
+  CAST(order_status AS STRING) AS order_status,
+  CAST(shipping_cost AS STRING) AS shipping_cost,
+  -- Rescued-Data-Spalte fängt unerwartete Felder auf
+  CAST(_rescued_data AS STRING) AS _rescued_data,
+  _metadata.file_name AS source_file,
+  _metadata.file_modification_time AS file_mod_time
+FROM STREAM read_files(
+  &#x27;${source}&#x27;,
+  format =&gt; &#x27;csv&#x27;,
+  schemaHints =&gt; &#x27;order_status STRING, shipping_cost STRING&#x27;
+);
+
+-- Erst hier, in einer separaten Zwischentabelle, erfolgt die Typisierung
+CREATE OR REFRESH STREAMING TABLE dq_1_bronze.sales_bronze_clean_demo
+COMMENT &quot;Intermediate table - type casting only, no quality checks&quot;
+AS
+SELECT
+  subsidiary_id,
+  order_id,
+  TRY_CAST(qty AS INT) AS qty,
+  TRY_CAST(unit_price AS DOUBLE) AS unit_price,
+  TRY_CAST(shipping_cost AS DOUBLE) AS shipping_cost,
+  source_file
+FROM STREAM dq_1_bronze.sales_bronze_raw_demo;</pre>
+
+<p>Die Option <code>schemaHints</code> kündigt Spalten an, die erst in künftigen Dateien auftauchen werden &ndash; historische Zeilen erhalten dafür einfach <code>NULL</code>. Für alles, was darüber hinausgeht und nicht im deklarierten Schema vorgesehen ist, dient die <code>_rescued_data</code>-Spalte (siehe auch Section 2) als letzte Auffanglinie: Unerwartete Felder werden dort als JSON gesammelt statt stillschweigend verworfen.</p>
+
+<h2>4. Das Quarantäne-Muster: is_quarantined statt DROP ROW</h2>
+<p><code>DROP ROW</code> entfernt ungültige Zeilen unwiderruflich &ndash; es gibt keinen Weg zurück. Das <strong>Quarantäne-Muster</strong> vermeidet diesen Datenverlust vollständig: Jede Zeile wird zunächst geschrieben, ein <code>is_quarantined</code>-Flag markiert per <strong>inverser Logik</strong>, ob irgendeine Regel verletzt wurde, und erst nachgelagerte Views trennen saubere von fehlerhaften Datensätzen. Die Kernregel dabei: Die Tabelle, auf der das Flag berechnet wird, darf ausschließlich <code>WARN</code> verwenden &ndash; würde man dort <code>DROP ROW</code> einsetzen, wären die fehlerhaften Zeilen bereits entfernt, bevor das Flag überhaupt berechnet werden könnte.</p>
+
+<pre class="code sql">CREATE OR REFRESH STREAMING TABLE dq_2_silver.sales_silver_dq_demo
+(
+  -- ... Geschäftsspalten ...
+  is_quarantined BOOLEAN,
+  quarantine_reason STRING,
+
+  -- Expectations nur mit WARN: kein Datensatz wird entfernt,
+  -- die Verstöße werden aber im Pipeline-UI sichtbar
+  CONSTRAINT check_subsidiary_id  EXPECT (subsidiary_id IS NOT NULL),
+  CONSTRAINT check_customer_id    EXPECT (customer_id IS NOT NULL),
+  CONSTRAINT valid_discount_range EXPECT (discount_pct IS NULL OR (discount_pct &gt;= 0 AND discount_pct &lt;= 100))
+)
+COMMENT &quot;Quarantine table with 6 expectations - supports inverse logic pattern&quot;
+PARTITIONED BY (is_quarantined);
+
+CREATE FLOW apply_inverse_logic_flow
+AS
+INSERT INTO dq_2_silver.sales_silver_dq_demo BY NAME
+SELECT
+  subsidiary_id, order_id, customer_id, discount_pct, -- ... weitere Spalten ...
+
+  -- Inverse Logik: TRUE, sobald IRGENDEINE Regel verletzt ist
+  NOT (
+    (subsidiary_id IS NOT NULL) AND
+    (customer_id IS NOT NULL) AND
+    (discount_pct IS NULL OR (discount_pct &gt;= 0 AND discount_pct &lt;= 100))
+  ) AS is_quarantined,
+
+  CONCAT_WS(&#x27;; &#x27;,
+    CASE WHEN subsidiary_id IS NULL THEN &#x27;Missing subsidiary_id&#x27; END,
+    CASE WHEN discount_pct IS NOT NULL AND (discount_pct &lt; 0 OR discount_pct &gt; 100)
+         THEN &#x27;Invalid discount_pct (must be 0-100)&#x27; END
+  ) AS quarantine_reason
+FROM STREAM dq_1_bronze.sales_bronze_clean_demo;
+
+-- Zwei nachgelagerte Streaming Tables trennen die Wege
+CREATE OR REFRESH STREAMING TABLE dq_2_silver.sales_silver_valid_demo
+AS SELECT * EXCEPT (is_quarantined, quarantine_reason)
+FROM STREAM dq_2_silver.sales_silver_dq_demo
+WHERE is_quarantined = FALSE;
+
+CREATE OR REFRESH STREAMING TABLE dq_2_silver.sales_silver_quarantined_demo
+AS SELECT *
+FROM STREAM dq_2_silver.sales_silver_dq_demo
+WHERE is_quarantined = TRUE;</pre>
+
+<p>Die Tabelle wird bewusst mit <code>PARTITIONED BY (is_quarantined)</code> angelegt: Da die beiden nachgelagerten Tabellen jeweils exakt nach diesem Flag filtern, profitieren sie von Partition Pruning und lesen nur die für sie relevante Partition, statt die gesamte Tabelle zu scannen. Die eigentliche Gold-Schicht baut anschließend ausschließlich auf der validierten <code>sales_silver_valid_demo</code>-Tabelle auf, während die Quarantäne-Tabelle für Root-Cause-Analysen und eine spätere Nachbearbeitung erhalten bleibt.</p>
+
+<figure class="img">
+<img src="assets/04/dq_pipeline_overview.png">
+<figcaption>Nach der Typisierung in der Bronze-Schicht durchläuft jede Zeile die Data-Quality-Prüfung; erst danach trennen sich saubere und quarantänierte Datensätze in zwei separate Streaming Tables.</figcaption>
+</figure>
+
+<table>
+<tr><th></th><th>DROP ROW</th><th>Quarantäne-Muster</th></tr>
+<tr><td>Ungültige Zeilen</td><td>Endgültig gelöscht</td><td>In Quarantäne-Tabelle erhalten</td></tr>
+<tr><td>Audit-Trail</td><td>Keiner</td><td>Vollständig, abfragbar</td></tr>
+<tr><td>Nachbearbeitung</td><td>Nicht möglich</td><td>Regel korrigieren &rarr; erneut einsortieren</td></tr>
+<tr><td>Pipeline-Komplexität</td><td>Gering &ndash; eine Tabelle</td><td>Moderat &ndash; eine Basistabelle plus zwei Views</td></tr>
+<tr><td>Empfehlung</td><td>Unkritische Streams mit etablierten Regeln</td><td>Produktive Pipelines mit Compliance-/Audit-Anforderungen</td></tr>
+</table>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Die Databricks-Dokumentation zu Expectation Patterns bestätigt die hier gezeigten Muster für Cross-Table-Validierung und Row-Count-Prüfungen als offiziell empfohlene Ansätze; das Quarantänieren ungültiger Datensätze über Regeln, die spiegelbildlich zu den definierten Expectations formuliert werden, wird dort explizit als Alternative zum Verwerfen von Daten aufgeführt. Ergänzend gilt: Expectations senden ihre Metriken unabhängig von der gewählten Verletzungsaktion an den Pipeline-Event-Log, sodass sich Datenqualitätstrends auch bei WARN-basierten Regeln über die Zeit auswerten lassen.<br>
+Quelle: <a href="https://learn.microsoft.com/en-us/azure/databricks/ldp/expectations">Manage data quality with pipeline expectations &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

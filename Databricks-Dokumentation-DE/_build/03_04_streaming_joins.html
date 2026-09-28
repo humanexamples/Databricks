@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Streaming Joins & Produktivbetrieb</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Streaming Joins & Produktivbetrieb</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: Kurs 3, Kapitel 9&ndash;10</p>
+
+<p>Reale Pipelines bestehen selten nur aus einer einzigen Datenquelle. Häufig müssen mehrere Streams miteinander verknüpft werden &ndash; etwa Bestelldaten mit dazugehörigen Statusänderungen. Dieses Dokument behandelt die in Lakeflow Declarative Pipelines unterstützten <strong>Join-Muster für Streaming-Daten</strong> sowie den Weg von einer Entwicklungspipeline zu einem überwachten, produktiven Deployment.</p>
+
+<h2>1. Drei Join-Muster im Überblick</h2>
+<table>
+<tr><th>Muster</th><th>Beschreibung</th><th>Beispiel</th></tr>
+<tr><td><strong>Stream-Snapshot-Join</strong><br>(Stream-Static-Join)</td><td>Eine Streaming Table wird mit einer statischen Referenztabelle verknüpft; nur die neuen Zeilen des Streams werden verarbeitet, dabei aber gegen den <em>vollständigen</em> aktuellen Stand der statischen Tabelle geprüft.</td><td>Länder-Codes einer Transaktionsstream mit einer statischen Länder-Nachschlagetabelle anreichern</td></tr>
+<tr><td><strong>Join zweier Streaming Tables über eine Materialized View</strong></td><td>Beide Seiten ändern sich kontinuierlich; bei jedem Pipeline-Lauf werden alle Zeilen beider Tabellen erneut verknüpft, mit Optimierungen wo möglich.</td><td>Kundenaktivität mit Produktkatalog-Updates zusammenführen</td></tr>
+<tr><td><strong>Stream-Stream-Join</strong></td><td>Inkrementeller Join zweier Streams, bei dem nur neu eintreffende Daten aus beiden Seiten verglichen werden; erfordert Windowing/Watermarking und liegt außerhalb des Kursumfangs.</td><td>Clickstream-Daten mit Echtzeit-Ad-Impressions zeitlich korrelieren</td></tr>
+</table>
+
+<h2>2. Stream-Snapshot-Join im Detail</h2>
+<p>Bei diesem Muster wird jede neu ankommende Zeile der Streaming Table gegen den <em>kompletten</em> Bestand der statischen Tabelle geprüft &ndash; das Ergebnis wird an die Ziel-Streaming-Table angehängt. Da nur eine Seite (der Stream) sich verändert, ist dieser Join effizient und zuverlässig: Die statische Tabelle muss nicht neu verarbeitet werden, nur die eingehenden Stream-Daten werden ausgewertet.</p>
+
+<h2>3. Join zweier Streaming Tables mit einer Materialized View</h2>
+<p>Sollen zwei sich kontinuierlich ändernde Streaming Tables verknüpft werden, reicht ein einfacher Stream-Snapshot-Join nicht mehr aus &ndash; hierfür kommt eine <strong>Materialized View</strong> zum Einsatz. Sie führt bei jedem Lauf einen vollständigen Inner Join über beide Quellen aus und nutzt dabei, wo möglich, inkrementelles Refresh, um unnötige Neuberechnung zu vermeiden:</p>
+
+<pre class="code sql">-- Zwei Streaming Tables ueber eine Materialized View verknuepfen
+CREATE OR REFRESH MATERIALIZED VIEW full_order_info_gold
+  COMMENT &quot;Bestellungen verknuepft mit ihrem Status-Verlauf&quot;
+  TBLPROPERTIES (&quot;quality&quot; = &quot;gold&quot;)
+AS
+SELECT o.order_id,
+       o.order_timestamp,
+       s.order_status,
+       s.order_status_timestamp
+FROM orders_silver o
+INNER JOIN status_silver s
+  ON o.order_id = s.order_id;
+
+-- Darauf aufbauende, gefilterte Gold-Sichten
+CREATE OR REFRESH MATERIALIZED VIEW cancelled_orders_gold
+AS
+SELECT *, datediff(order_status_timestamp, order_timestamp) AS days_to_cancel
+FROM full_order_info_gold
+WHERE order_status = &#x27;canceled&#x27;;</pre>
+
+<p>Beachten Sie: Beim Referenzieren der beiden Streaming Tables (<code>orders_silver</code>, <code>status_silver</code>) innerhalb der Materialized-View-Definition entfällt das <code>STREAM</code>-Schlüsselwort &ndash; die View verarbeitet grundsätzlich den kompletten aktuellen Datenbestand beider Quellen.</p>
+
+<figure class="img">
+<img src="assets/03/stream_stream_joins.png">
+<figcaption>Je nach Kombination aus statischer und streamender Quelle eignet sich ein anderes Join-Muster.</figcaption>
+</figure>
+
+<h2>4. Von der Entwicklung in die Produktion</h2>
+<p>Der Übergang einer Pipeline in den produktiven Betrieb umfasst vier zentrale operative Aufgaben:</p>
+<ul>
+<li><strong>Dokumentation</strong> &ndash; <code>COMMENT</code> und <code>TBLPROPERTIES</code> für jeden Datensatz erleichtern das Verständnis in Unity Catalog, etwa <code>"quality" = "bronze"</code> zur Kennzeichnung der Medaillon-Schicht oder <code>"pipelines.reset.allowed" = false</code>, um versehentliche vollständige Refreshes und den damit verbundenen Verlust von Checkpoints zu verhindern.</li>
+<li><strong>Scheduling</strong> &ndash; die Pipeline wird entweder im <strong>Triggered-Modus</strong> (läuft nach Zeitplan, verarbeitet inkrementell) oder im <strong>Continuous-Modus</strong> (dauerhaft aktiv) betrieben.</li>
+<li><strong>Benachrichtigungen</strong> &ndash; E-Mail-Alarme lassen sich für Start, Erfolg und Fehlschlag konfigurieren.</li>
+<li><strong>Monitoring über das Event-Log</strong> &ndash; jeder Lauf schreibt detaillierte Ereignisdaten in eine (standardmäßig versteckte) Delta-Tabelle.</li>
+</ul>
+
+<pre class="code sql">-- Grundstruktur des Pipeline-Event-Logs abfragen
+SELECT id, event_type, details,
+       details:flow_progress,
+       details:user_action
+FROM sdp_1_bronze.event_log_demo10;</pre>
+
+<p>Ein besonders nützlicher Anwendungsfall des Event-Logs ist die Analyse von Datenqualitäts-Metriken über mehrere Läufe hinweg: Die JSON-Struktur im Feld <code>details</code> lässt sich mit <code>from_json</code> und <code>explode</code> in tabellarische Form bringen, um pro Constraint bestandene und fehlgeschlagene Datensätze zu aggregieren.</p>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks empfiehlt, Pipeline-Quellcode konsequent zu versionieren und für das Deployment über Umgebungen hinweg <strong>Databricks Asset Bundles</strong> (deklarative YAML-Konfiguration neben dem Quellcode) einzusetzen; über die <code>databricks bundle</code>-CLI lassen sich Pipelines validieren, deployen und ausführen. Beim Stream-Snapshot-Join gilt zudem: Werden Datensätze in der statischen Tabelle nachträglich geändert, nachdem der entsprechende Stream-Datensatz bereits verarbeitet wurde, wirken sich diese Änderungen erst nach einem vollständigen Refresh aus &ndash; nicht automatisch rückwirkend.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/ldp/best-practices">Best practices for Lakeflow pipelines &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

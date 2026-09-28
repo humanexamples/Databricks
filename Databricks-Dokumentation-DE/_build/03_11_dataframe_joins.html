@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>DataFrame-Joins: Inner, Left, Broadcast, Cross und Union</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>DataFrame-Joins: Inner, Left, Broadcast, Cross und Union</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: PySpark-/Databricks-Referenzdokumentation</p>
+
+<p>Kaum eine Transformation ist im Data-Engineering-Alltag so häufig wie das Zusammenführen zweier Tabellen. Der Exam Guide verlangt konkret die Beherrschung von Inner Join, Left Join, Broadcast Join, Joins über mehrere Schlüssel, Cross Join sowie <code>union</code>/<code>union all</code>. Dieses Kapitel zeigt alle genannten Varianten anhand von zwei einfachen Beispieltabellen &ndash; <code>customers</code> (Kunden) und <code>orders</code> (Bestellungen) &ndash; jeweils in PySpark- und SQL-Syntax.</p>
+
+<p>Als Ausgangsdaten dienen zwei kleine, frei erfundene DataFrames:</p>
+<pre class="code python">customers = spark.createDataFrame([
+    (1, &quot;Anna&quot;,   &quot;Berlin&quot;),
+    (2, &quot;Ben&quot;,    &quot;München&quot;),
+    (3, &quot;Clara&quot;,  &quot;Hamburg&quot;),
+], [&quot;customer_id&quot;, &quot;name&quot;, &quot;city&quot;])
+
+orders = spark.createDataFrame([
+    (100, 1, 49.90),
+    (101, 1, 12.50),
+    (102, 2, 99.00),
+    (103, 4, 20.00),   # customer_id 4 existiert nicht in customers
+], [&quot;order_id&quot;, &quot;customer_id&quot;, &quot;amount&quot;])
+
+customers.createOrReplaceTempView(&quot;customers&quot;)
+orders.createOrReplaceTempView(&quot;orders&quot;)</pre>
+
+<h2>1. Inner Join</h2>
+<p>Der <strong>Inner Join</strong> ist der Standardfall: Er liefert ausschließlich Zeilen, für die in <em>beiden</em> DataFrames ein passender Schlüssel existiert. Kunde &bdquo;Clara&ldquo; (ohne Bestellung) und Bestellung 103 (mit unbekanntem <code>customer_id</code> 4) fallen dabei aus dem Ergebnis heraus.</p>
+<pre class="code python">result = customers.join(orders, on=&quot;customer_id&quot;, how=&quot;inner&quot;)
+# gleichwertig: how=&quot;inner&quot; ist der Standardwert und kann weggelassen werden
+result = customers.join(orders, on=&quot;customer_id&quot;)</pre>
+<pre class="code sql">SELECT c.customer_id, c.name, o.order_id, o.amount
+FROM customers c
+INNER JOIN orders o ON c.customer_id = o.customer_id;</pre>
+
+<h2>2. Left Join (Left Outer Join)</h2>
+<p>Ein <strong>Left Join</strong> (auch <code>left_outer</code>) behält alle Zeilen der linken Tabelle bei &ndash; unabhängig davon, ob ein passender Partner in der rechten Tabelle existiert. Fehlt ein Treffer, werden die Spalten der rechten Tabelle mit <code>NULL</code> aufgefüllt. Im Beispiel bleibt Clara im Ergebnis erhalten, ihre Bestellspalten sind jedoch <code>NULL</code>.</p>
+<pre class="code python">result = customers.join(orders, on=&quot;customer_id&quot;, how=&quot;left&quot;)
+# alternative Schreibweisen, alle gleichwertig:
+customers.join(orders, on=&quot;customer_id&quot;, how=&quot;left_outer&quot;)</pre>
+<pre class="code sql">SELECT c.customer_id, c.name, o.order_id, o.amount
+FROM customers c
+LEFT JOIN orders o ON c.customer_id = o.customer_id;</pre>
+<p>Analog existieren <code>how="right"</code> (Right Outer Join, behält alle Zeilen der rechten Tabelle) und <code>how="outer"</code> bzw. <code>"full"</code> (Full Outer Join, behält Zeilen aus beiden Tabellen und füllt jeweils fehlende Seite mit <code>NULL</code> auf).</p>
+
+<h2>3. Broadcast Join</h2>
+<p>Ein <strong>Broadcast Join</strong> ist keine eigene <code>how</code>-Option, sondern ein <em>Optimierungshinweis</em>: Ist eine der beiden Tabellen klein genug, um komplett in den Arbeitsspeicher jedes Executors zu passen (typischerweise eine kleine Dimensionstabelle wie <code>customers</code>), kann sie vollständig an alle Executor verteilt werden. Das erspart den teuren Shuffle der großen Tabelle über das Netzwerk. Spark entscheidet automatisch anhand des Parameters <code>spark.sql.autoBroadcastJoinThreshold</code> (siehe Kapitel 14 dieser Section), ob gebroadcastet wird &ndash; mit dem expliziten Hint <code>broadcast()</code> lässt sich dieses Verhalten aber auch gezielt erzwingen.</p>
+<pre class="code python">from pyspark.sql.functions import broadcast
+
+result = orders.join(broadcast(customers), on=&quot;customer_id&quot;, how=&quot;inner&quot;)</pre>
+<pre class="code sql">SELECT /*+ BROADCAST(c) */ o.order_id, o.amount, c.name
+FROM orders o
+INNER JOIN customers c ON o.customer_id = c.customer_id;</pre>
+<p>Der Broadcast-Hint eignet sich vor allem dann, wenn Spark die tatsächliche Größe einer Tabelle nicht korrekt einschätzen kann (z.&nbsp;B. nach mehreren Transformationsschritten) und deshalb von sich aus keinen Broadcast Join wählen würde, obwohl die Tabelle klein genug wäre.</p>
+
+<h2>4. Joins über mehrere Schlüssel</h2>
+<p>Sollen zwei Tabellen über <em>mehrere</em> Spalten gleichzeitig verglichen werden (z.&nbsp;B. weil ein einzelner Schlüssel nicht eindeutig ist), gibt es in PySpark zwei gängige Varianten: eine Liste gemeinsamer Spaltennamen oder eine zusammengesetzte Bedingung mit <code>&amp;</code>.</p>
+<pre class="code python"># Variante A: Liste gemeinsamer Spaltennamen (identisch benannt in beiden DataFrames)
+result = df1.join(df2, on=[&quot;customer_id&quot;, &quot;order_year&quot;], how=&quot;inner&quot;)
+
+# Variante B: zusammengesetzte Bedingung, auch bei unterschiedlichen Spaltennamen möglich
+result = df1.join(
+    df2,
+    on=(df1.customer_id == df2.cust_id) &amp; (df1.order_year == df2.year),
+    how=&quot;inner&quot;,
+)</pre>
+<pre class="code sql">SELECT *
+FROM df1
+INNER JOIN df2
+  ON df1.customer_id = df2.cust_id
+ AND df1.order_year = df2.year;</pre>
+<p>Wichtig bei Variante&nbsp;B: Da die Join-Bedingung hier über einen Spaltenausdruck statt über <code>on="..."</code> mit gemeinsamem Namen erfolgt, tauchen beide Schlüsselspalten (<code>customer_id</code> <em>und</em> <code>cust_id</code>) im Ergebnis auf &ndash; im Gegensatz zu Variante&nbsp;A, bei der die gemeinsame Spalte nur einmal erscheint.</p>
+
+<h2>5. Cross Join</h2>
+<p>Ein <strong>Cross Join</strong> (kartesisches Produkt) verknüpft jede Zeile der linken Tabelle mit jeder Zeile der rechten Tabelle &ndash; ganz ohne Join-Bedingung. Die Ergebnisgröße entspricht dem Produkt beider Zeilenzahlen und kann dadurch sehr schnell sehr groß werden. Typischer Anwendungsfall sind Kombinationstabellen, etwa alle möglichen Kombinationen aus Produktfarben und -größen.</p>
+<pre class="code python">colors = spark.createDataFrame([(&quot;rot&quot;,), (&quot;blau&quot;,)], [&quot;farbe&quot;])
+sizes  = spark.createDataFrame([(&quot;S&quot;,), (&quot;M&quot;,), (&quot;L&quot;,)], [&quot;groesse&quot;])
+
+kombinationen = colors.crossJoin(sizes)   # Ergebnis: 2 x 3 = 6 Zeilen</pre>
+<pre class="code sql">SELECT farbe, groesse
+FROM colors
+CROSS JOIN sizes;</pre>
+<p>Cross Joins sollten mit Bedacht eingesetzt werden: Bei zwei Tabellen mit jeweils einer Million Zeilen entstünde ein Ergebnis mit einer Billion Zeilen. Spark verweigert einen impliziten Cross Join standardmäßig sogar (Fehlermeldung <code>CROSS_JOIN_UNSUPPORTED</code>), wenn <code>join()</code> ohne Bedingung aufgerufen wird &ndash; die explizite Methode <code>crossJoin()</code> bzw. die SQL-Klausel <code>CROSS JOIN</code> muss bewusst gewählt werden.</p>
+
+<h2>6. Union, Union All und UnionByName</h2>
+<p>Während Joins Tabellen <em>nebeneinander</em> (spaltenweise) zusammenführen, hängen <code>union</code>-Operationen zwei DataFrames <em>untereinander</em> (zeilenweise) an &ndash; Voraussetzung ist dieselbe Anzahl an Spalten mit kompatiblen Datentypen.</p>
+<pre class="code python">orders_de = spark.createDataFrame([(200, 1, 30.0)], [&quot;order_id&quot;, &quot;customer_id&quot;, &quot;amount&quot;])
+orders_at = spark.createDataFrame([(300, 2, 45.0)], [&quot;order_id&quot;, &quot;customer_id&quot;, &quot;amount&quot;])
+
+# union() und unionAll() sind in PySpark identisch (kein automatisches DISTINCT!)
+alle_bestellungen = orders_de.union(orders_at)
+alle_bestellungen = orders_de.unionAll(orders_at)   # Alias, gleiches Verhalten
+
+# unionByName(): matcht Spalten anhand ihres Namens statt ihrer Position
+orders_ch = spark.createDataFrame([(2, 400, 60.0)], [&quot;customer_id&quot;, &quot;order_id&quot;, &quot;amount&quot;])
+alle_bestellungen = orders_de.unionByName(orders_ch)
+
+# unionByName mit allowMissingColumns=True erlaubt sogar unterschiedliche Spaltenmengen
+# fehlende Spalten werden in den betroffenen Zeilen automatisch mit NULL aufgefüllt
+orders_uk = spark.createDataFrame([(500, 3, 15.0, &quot;GBP&quot;)], [&quot;order_id&quot;, &quot;customer_id&quot;, &quot;amount&quot;, &quot;currency&quot;])
+alle_bestellungen = orders_de.unionByName(orders_uk, allowMissingColumns=True)</pre>
+<pre class="code sql">SELECT * FROM orders_de
+UNION ALL
+SELECT * FROM orders_at;
+
+-- SQL UNION (ohne ALL) entfernt zusätzlich Duplikate, entspricht also union().distinct()
+SELECT * FROM orders_de
+UNION
+SELECT * FROM orders_at;</pre>
+<p><strong>Wichtiger Unterschied zwischen PySpark und SQL:</strong> In der DataFrame-API sind <code>union()</code> und <code>unionAll()</code> identisch und entfernen <em>keine</em> Duplikate. In reinem SQL hingegen entfernt <code>UNION</code> (ohne <code>ALL</code>) Duplikate, während <code>UNION ALL</code> alle Zeilen unverändert übernimmt &ndash; hier lohnt sich also besondere Aufmerksamkeit, da der Name <code>union()</code> in PySpark auf den ersten Blick das SQL-<code>UNION</code>-Verhalten vermuten lässt, tatsächlich aber <code>UNION ALL</code> entspricht. Ein anschließendes <code>.distinct()</code> stellt bei Bedarf das SQL-<code>UNION</code>-Verhalten in PySpark her. <code>union()</code> und <code>unionAll()</code> matchen Spalten zudem rein <strong>positionsbasiert</strong> &ndash; unterscheidet sich die Spaltenreihenfolge zwischen beiden DataFrames, landen Werte unbemerkt in der falschen Spalte. <code>unionByName()</code> vermeidet dieses Risiko, indem es Spalten anhand ihres Namens zuordnet.</p>
+
+<h2>7. Welcher Join-Typ wann?</h2>
+<table>
+<tr><th>Join-Typ</th><th>Wann sinnvoll</th></tr>
+<tr><td>Inner Join</td><td>Nur eindeutig zuordenbare Datensätze aus beiden Tabellen werden benötigt (Standardfall).</td></tr>
+<tr><td>Left Join</td><td>Alle Datensätze der &bdquo;Haupttabelle&ldquo; sollen erhalten bleiben, auch ohne Treffer in der Zweittabelle (z.&nbsp;B. alle Kunden, auch ohne Bestellung).</td></tr>
+<tr><td>Broadcast Join</td><td>Eine der beiden Tabellen ist klein genug für den Arbeitsspeicher jedes Executors (Dimensionstabelle) &ndash; spart teuren Shuffle.</td></tr>
+<tr><td>Mehrfachschlüssel-Join</td><td>Ein einzelner Schlüssel reicht zur eindeutigen Zuordnung nicht aus (z.&nbsp;B. Kombination aus ID und Jahr).</td></tr>
+<tr><td>Cross Join</td><td>Bewusst alle Kombinationen zweier (meist kleiner) Mengen erzeugt werden sollen.</td></tr>
+<tr><td>Union / Union All</td><td>Zeilen mehrerer strukturgleicher Tabellen sollen untereinandergehängt werden, z.&nbsp;B. regionale Teiltabellen zu einer Gesamttabelle.</td></tr>
+</table>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen PySpark-Dokumentation:</strong> <code>DataFrame.crossJoin()</code> erzeugt explizit das kartesische Produkt zweier DataFrames ohne Join-Bedingung. <code>functions.broadcast()</code> markiert einen DataFrame als klein genug, um an alle Worker-Knoten verteilt zu werden, und ist damit der explizite Gegenpart zum automatischen Broadcast-Verhalten über <code>spark.sql.autoBroadcastJoinThreshold</code>. <code>DataFrame.unionByName()</code> unterstützt seit Spark&nbsp;3.1 zusätzlich den Parameter <code>allowMissingColumns</code>, der fehlende Spalten in einem der beiden DataFrames automatisch mit <code>NULL</code> auffüllt, statt einen Fehler zu werfen.<br>
+Quelle: <a href="https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.DataFrame.crossJoin.html">pyspark.sql.DataFrame.crossJoin &ndash; Apache Spark Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

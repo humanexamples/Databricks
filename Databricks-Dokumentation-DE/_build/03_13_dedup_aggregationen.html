@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Deduplizierung und Aggregationen</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Deduplizierung und Aggregationen</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: PySpark-/Databricks-Referenzdokumentation</p>
+
+<p>Rohdaten enthalten in der Praxis fast immer Duplikate &ndash; sei es durch doppelte Quellsystem-Exporte, wiederholte Streaming-Ereignisse oder fehlerhafte Uploads. Der Exam Guide verlangt sowohl die Beherrschung von Deduplizierungs-Operationen als auch der klassischen Aggregationsfunktionen (<code>count</code>, <code>approx_count_distinct</code>, Mittelwert, <code>summary</code>). Als Beispieldaten dient eine kleine Kundentabelle mit absichtlich eingebauten Duplikaten:</p>
+
+<pre class="code python">kunden = spark.createDataFrame([
+    (1, &quot;Anna&quot;,  &quot;Berlin&quot;,  &quot;anna@mail.de&quot;),
+    (2, &quot;Ben&quot;,   &quot;München&quot;, &quot;ben@mail.de&quot;),
+    (2, &quot;Ben&quot;,   &quot;München&quot;, &quot;ben@mail.de&quot;),   # exaktes Duplikat von Zeile 2
+    (3, &quot;Clara&quot;, &quot;Hamburg&quot;, &quot;clara@mail.de&quot;),
+    (3, &quot;Clara&quot;, &quot;Hamburg&quot;, &quot;clara2@mail.de&quot;), # gleiche ID, andere E-Mail
+], [&quot;customer_id&quot;, &quot;name&quot;, &quot;city&quot;, &quot;email&quot;])
+
+kunden.createOrReplaceTempView(&quot;kunden&quot;)</pre>
+
+<h2>1. Deduplizierung: distinct() und dropDuplicates()</h2>
+<p><code>distinct()</code> entfernt Zeilen, die in <em>allen</em> Spalten exakt übereinstimmen. Im Beispiel wird dadurch nur die exakte Kopie von Ben (Zeile 3) entfernt &ndash; die beiden Clara-Zeilen unterscheiden sich in der E-Mail-Adresse und bleiben daher beide erhalten.</p>
+<pre class="code python">kunden_distinct = kunden.distinct()   # 4 statt 5 Zeilen</pre>
+<pre class="code sql">SELECT DISTINCT * FROM kunden;</pre>
+
+<p><code>dropDuplicates()</code> (ohne Argumente identisch zu <code>distinct()</code>) erlaubt zusätzlich, Duplikate nur anhand einer <em>Teilmenge</em> von Spalten zu bestimmen. Im Beispiel werden nun beide Clara-Zeilen als Duplikate behandelt, da nur <code>customer_id</code> verglichen wird &ndash; welche der beiden Varianten (mit welcher E-Mail-Adresse) behalten wird, ist dabei nicht deterministisch garantiert.</p>
+<pre class="code python">kunden_ohne_duplikate = kunden.dropDuplicates([&quot;customer_id&quot;])   # 3 Zeilen: 1, 2, 3
+kunden_exakt = kunden.dropDuplicates()  # ohne Spaltenliste: identisch zu distinct()</pre>
+<pre class="code sql">SELECT customer_id, FIRST(name) AS name, FIRST(city) AS city, FIRST(email) AS email
+FROM kunden
+GROUP BY customer_id;
+-- SQL kennt keine direkte Entsprechung zu dropDuplicates(subset); GROUP BY mit
+-- Aggregatfunktionen wie FIRST()/MAX() bildet das Verhalten nach.</pre>
+
+<h2>2. Zählen: count() und approx_count_distinct()</h2>
+<p><code>count()</code> als Aktion auf einem DataFrame liefert die exakte Zeilenzahl; als Aggregatfunktion innerhalb von <code>agg()</code> oder <code>groupBy().agg()</code> zählt sie Werte pro Gruppe. Für die Anzahl <em>unterschiedlicher</em> Werte einer Spalte gibt es zwei Optionen: das exakte, aber bei großen Datenmengen teure <code>countDistinct()</code> sowie das deutlich günstigere, approximative <code>approx_count_distinct()</code> (basierend auf dem HyperLogLog++-Algorithmus).</p>
+<pre class="code python">from pyspark.sql.functions import count, countDistinct, approx_count_distinct
+
+kunden.count()                                              # exakte Gesamtzeilenzahl (5)
+kunden.select(countDistinct(&quot;customer_id&quot;)).show()           # exakt: 3
+kunden.select(approx_count_distinct(&quot;customer_id&quot;)).show()   # approximativ, mit Standardfehler 5%
+
+# Standardfehler (rsd) explizit einstellen, z.B. für höhere Genauigkeit auf Kosten der Performance:
+kunden.select(approx_count_distinct(&quot;customer_id&quot;, 0.01)).show()</pre>
+<pre class="code sql">SELECT
+  COUNT(*)                          AS anzahl_zeilen,
+  COUNT(DISTINCT customer_id)       AS exakte_anzahl_kunden,
+  APPROX_COUNT_DISTINCT(customer_id) AS approx_anzahl_kunden
+FROM kunden;</pre>
+<p><code>approx_count_distinct()</code> lohnt sich vor allem bei sehr großen Tabellen mit Millionen unterschiedlicher Werte (z.&nbsp;B. eindeutige Besucher-IDs auf einer Webseite): Der exakte <code>COUNT(DISTINCT ...)</code> erzwingt einen vollständigen Shuffle aller Werte, während die approximative Variante mit konstantem, deutlich geringerem Speicherbedarf auskommt &ndash; auf Kosten einer kleinen, konfigurierbaren Fehlertoleranz.</p>
+
+<h2>3. Aggregationen: Mittelwert, groupBy().agg() und Summary</h2>
+<p>Für Kennzahlen pro Gruppe wird typischerweise <code>groupBy()</code> mit anschließendem <code>agg()</code> kombiniert. Die Funktionen <code>avg()</code> und <code>mean()</code> sind dabei reine Aliase und vollständig austauschbar. Als zweites Beispiel dient eine kleine Bestelltabelle:</p>
+<pre class="code python">bestellungen = spark.createDataFrame([
+    (1, &quot;Anna&quot;,  49.90),
+    (2, &quot;Anna&quot;,  12.50),
+    (3, &quot;Ben&quot;,   99.00),
+    (4, &quot;Clara&quot;, 20.00),
+    (5, &quot;Clara&quot;, 35.00),
+], [&quot;order_id&quot;, &quot;customer_name&quot;, &quot;amount&quot;])
+bestellungen.createOrReplaceTempView(&quot;bestellungen&quot;)</pre>
+<pre class="code python">from pyspark.sql.functions import avg, mean, min as spark_min, max as spark_max
+
+kunden.groupBy(&quot;city&quot;).agg(
+    count(&quot;*&quot;).alias(&quot;anzahl_kunden&quot;),
+    approx_count_distinct(&quot;customer_id&quot;).alias(&quot;anzahl_eindeutig&quot;),
+).show()
+
+bestellungen.groupBy(&quot;customer_name&quot;).agg(
+    avg(&quot;amount&quot;).alias(&quot;durchschnittsbetrag&quot;),   # avg() und mean() sind identisch
+    spark_min(&quot;amount&quot;).alias(&quot;min_betrag&quot;),
+    spark_max(&quot;amount&quot;).alias(&quot;max_betrag&quot;),
+).show()</pre>
+<pre class="code sql">SELECT city, COUNT(*) AS anzahl_kunden, APPROX_COUNT_DISTINCT(customer_id) AS anzahl_eindeutig
+FROM kunden
+GROUP BY city;
+
+SELECT customer_name, AVG(amount) AS durchschnittsbetrag, MIN(amount) AS min_betrag, MAX(amount) AS max_betrag
+FROM bestellungen
+GROUP BY customer_name;</pre>
+
+<p>Für eine schnelle, explorative Übersicht über eine gesamte Tabelle eignen sich <code>describe()</code> und das umfangreichere <code>summary()</code>. <code>describe()</code> liefert je numerischer/String-Spalte <code>count</code>, <code>mean</code>, <code>stddev</code>, <code>min</code> und <code>max</code>. <code>summary()</code> erweitert dies standardmäßig um Perzentile (25&nbsp;%, 50&nbsp;%/Median, 75&nbsp;%) und lässt sich über ein optionales Argument auf genau die gewünschten Statistiken einschränken.</p>
+<pre class="code python">kunden.describe().show()
+bestellungen.summary().show()
+# nur bestimmte Statistiken berechnen (spart Rechenzeit auf großen Tabellen):
+bestellungen.summary(&quot;count&quot;, &quot;min&quot;, &quot;25%&quot;, &quot;75%&quot;, &quot;max&quot;).show()</pre>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen PySpark-Dokumentation:</strong> <code>approx_count_distinct(col, rsd=0.05)</code> berechnet die approximative Anzahl unterschiedlicher Elemente einer Spalte über den HyperLogLog++-Algorithmus; der Parameter <code>rsd</code> steuert dabei den relativen Standardfehler &ndash; laut Dokumentation gilt: Ist <code>rsd &lt; 0.01</code>, ist es effizienter, stattdessen <code>count_distinct()</code> (exakt) zu verwenden, da der Aufwand für sehr geringe Fehlertoleranzen den Vorteil der Approximation aufhebt. <code>dropDuplicates()</code> ohne Spaltenliste verhält sich laut Referenz identisch zu <code>distinct()</code>; mit Spaltenliste werden nur die angegebenen Spalten zur Duplikaterkennung herangezogen, wobei welche der doppelten Zeilen behalten wird, nicht deterministisch festgelegt ist.<br>
+Quelle: <a href="https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.approx_count_distinct.html">pyspark.sql.functions.approx_count_distinct &ndash; Apache Spark Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>

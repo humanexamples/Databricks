@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Konzepte: Flows, Streaming Tables & Materialized Views</title><style>
+@page { margin: 20mm 18mm 18mm 18mm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; color:#1a1a1a; line-height:1.55; font-size:11.5pt; }
+h1 { font-size:24pt; color:#0b3d2e; margin-bottom:2pt; }
+.subtitle { color:#4a4a4a; font-size:12pt; margin-top:0; margin-bottom:18pt; border-bottom:2px solid #ff3621; padding-bottom:10pt; }
+h2 { font-size:16pt; color:#0b3d2e; margin-top:22pt; border-left:5px solid #ff3621; padding-left:8pt; }
+h3 { font-size:13pt; color:#1a1a1a; margin-top:16pt; }
+p { margin:8pt 0; text-align:justify; }
+ul, ol { margin:6pt 0; padding-left:22pt; }
+li { margin:3pt 0; }
+code { font-family:'Consolas','Cascadia Mono',monospace; background:#f0f0f0; padding:1pt 4pt; border-radius:3pt; font-size:10pt; }
+pre.code { font-family:'Consolas','Cascadia Mono',monospace; background:#f5f5f5; border:1px solid #ddd; border-left:4px solid #1b3139; border-radius:4pt; padding:10pt 12pt; font-size:9.5pt; line-height:1.4; white-space:pre-wrap; word-wrap:break-word; margin:10pt 0; page-break-inside:avoid; }
+pre.code.sql { border-left-color:#ff3621; }
+pre.code.python { border-left-color:#00a972; }
+figure.img { margin:14pt 0; text-align:center; page-break-inside:avoid; }
+figure.img img { max-width:75%; max-height:75mm; border:1px solid #ccc; border-radius:3pt; }
+figcaption { font-size:9pt; color:#666; margin-top:5pt; font-style:italic; }
+.docbox { background:#eef7f2; border:1px solid #b6ddc8; border-radius:5pt; padding:10pt 14pt; margin:16pt 0; font-size:10.5pt; }
+.docbox strong { color:#0b3d2e; }
+table { border-collapse:collapse; width:100%; margin:10pt 0; font-size:10pt; }
+th, td { border:1px solid #ccc; padding:5pt 8pt; text-align:left; }
+th { background:#f0f0f0; }
+.footer-note { margin-top:26pt; padding-top:8pt; border-top:1px solid #ddd; font-size:8.5pt; color:#888; }
+</style></head>
+<body>
+<h1>Konzepte: Flows, Streaming Tables & Materialized Views</h1>
+<p class="subtitle">Section 3 &middot; Data Transformation and Modelling &middot; Quelle: Kurs 3, Kapitel 2&ndash;3</p>
+
+<p>Klassische ETL-Pipelines lesen bei jedem Lauf alle Dateien eines Verzeichnisses neu ein &ndash; das funktioniert für kleine Datenmengen, wird aber mit wachsendem Datenvolumen zunehmend teuer und langsam. <strong>Lakeflow Declarative Pipelines</strong> (kurz: SDP, ehemals <strong>Delta Live Tables</strong>/DLT) lösen dieses Problem, indem Entwickler nur noch <em>deklarieren</em>, welche Tabellen aus welchen Quellen entstehen sollen &ndash; Databricks kümmert sich automatisch um inkrementelle Verarbeitung, Abhängigkeiten und Orchestrierung im Hintergrund.</p>
+
+<h2>1. Warum deklarativ statt prozedural?</h2>
+<p>Bei einer klassischen (prozeduralen) Pipeline wird jeder Schritt einzeln als <code>CREATE OR REPLACE TABLE</code> formuliert, wobei jede Anweisung bei jedem Lauf die komplette Quelle neu liest und neu berechnet:</p>
+
+<pre class="code sql">-- Klassischer Ansatz: jede Ausfuehrung liest ALLE Dateien neu ein
+CREATE OR REPLACE TABLE orders_bronze
+AS
+SELECT *, current_timestamp() AS processing_time, _metadata.file_name AS source_file
+FROM read_files(source_volume_path || &quot;/orders&quot;, format =&gt; &quot;json&quot;);
+
+CREATE OR REPLACE TABLE orders_silver
+AS
+SELECT order_id, timestamp(order_timestamp) AS order_timestamp, customer_id, notifications
+FROM orders_bronze;</pre>
+
+<p>Dieser Ansatz funktioniert, wird aber mit wachsender Datenmenge zunehmend ineffizient: Kosten und Laufzeit steigen mit jeder zusätzlichen Datei, unabhängig davon, ob diese neu ist oder nicht. Structured Streaming würde inkrementelle Verarbeitung ermöglichen, bringt dafür aber deutlich mehr Komplexität mit sich (Checkpoints, Trigger-Konfiguration, Zustandsverwaltung). Lakeflow Declarative Pipelines schließt genau diese Lücke: Man beschreibt das <em>gewünschte Ergebnis</em>, nicht den prozeduralen Weg dorthin &ndash; die Plattform übernimmt inkrementelle Ausführung, Abhängigkeitsauflösung und Automatisierung.</p>
+
+<h2>2. Namensänderung: von Delta Live Tables zu Lakeflow Declarative Pipelines</h2>
+<p>Wer bereits mit <strong>Delta Live Tables (DLT)</strong> gearbeitet hat, findet die Konzepte hier wieder &ndash; nur mit aktualisierter Terminologie. Die Kernsemantik ist unverändert, alte Syntax bleibt aus Kompatibilitätsgründen nutzbar:</p>
+<table>
+<tr><th>Veraltet (DLT)</th><th>Aktuell (Lakeflow Declarative Pipelines)</th></tr>
+<tr><td><code>CREATE OR REFRESH STREAMING LIVE TABLE</code></td><td><code>CREATE OR REFRESH STREAMING TABLE</code></td></tr>
+<tr><td><code>CREATE OR REFRESH LIVE TABLE</code></td><td><code>CREATE OR REFRESH MATERIALIZED VIEW</code></td></tr>
+<tr><td><code>CREATE LIVE VIEW</code> / <code>CREATE TEMPORARY LIVE VIEW</code></td><td><code>CREATE VIEW</code> / <code>CREATE TEMPORARY VIEW</code></td></tr>
+</table>
+
+<h2>3. Die drei Datensatztypen</h2>
+<p>Lakeflow Declarative Pipelines unterscheidet drei Arten von Datensätzen, die jeweils für einen anderen Verarbeitungszweck gedacht sind:</p>
+
+<h3>3.1 Streaming Table (ST)</h3>
+<p>Eine <strong>Streaming Table</strong> unterstützt inkrementelle Verarbeitung und liest bei jedem Lauf ausschließlich neue Daten ein. Sie eignet sich für die Bronze- und Silver-Schicht, wo kontinuierlich neue Rohdaten eintreffen.</p>
+
+<pre class="code sql">CREATE OR REFRESH STREAMING TABLE orders_bronze
+AS
+SELECT *
+FROM STREAM read_files(
+  source_volume_path || &#x27;/orders&#x27;,
+  format =&gt; &#x27;json&#x27;
+);</pre>
+
+<p>Entscheidend ist das Schlüsselwort <code>STREAM</code> in der <code>FROM</code>-Klausel: Es sorgt dafür, dass Auto Loader nur die seit dem letzten Lauf neu hinzugekommenen Dateien verarbeitet, statt das gesamte Quellverzeichnis erneut zu lesen.</p>
+
+<h3>3.2 Materialized View (MV)</h3>
+<p>Eine <strong>Materialized View</strong> berechnet ihre Ergebnisse so, dass sie stets den aktuellen Stand der zugrunde liegenden Daten widerspiegeln &ndash; typischerweise für Aggregationen, Transformationen oder häufig genutzte, vorab berechnete Abfragen in der Gold-Schicht:</p>
+
+<pre class="code sql">CREATE OR REFRESH MATERIALIZED VIEW gold_orders_by_date
+AS
+SELECT date(order_timestamp) AS order_date, count(*) AS total_daily_orders
+FROM orders_silver;</pre>
+
+<p>Wichtig: Beim Referenzieren einer Streaming Table innerhalb einer Materialized-View-Definition entfällt das <code>STREAM</code>-Schlüsselwort &ndash; die Materialized View verarbeitet grundsätzlich den vollständigen aktuellen Datenbestand der Quelle. Ein kostenbasierter Optimierer entscheidet dabei automatisch, ob ein inkrementelles Refresh oder eine vollständige Neuberechnung günstiger ist.</p>
+
+<h3>3.3 Views (Temporary View und View)</h3>
+<p>Views erzeugen keine physisch gespeicherten Daten, sondern rein logische Repräsentationen der zugrunde liegenden SQL-Abfrage. <strong>Temporary Views</strong> existieren nur für die Dauer eines Pipeline-Laufs, während <strong>Views</strong> dauerhaft in Unity Catalog registriert werden:</p>
+
+<pre class="code sql">-- Temporaer, nur waehrend des Pipeline-Laufs sichtbar
+CREATE TEMPORARY VIEW orders_active AS
+SELECT * FROM orders_silver WHERE notifications = &#x27;Y&#x27;;
+
+-- Dauerhaft in Unity Catalog registriert
+CREATE VIEW orders_active_view AS
+SELECT * FROM orders_silver WHERE notifications = &#x27;Y&#x27;;</pre>
+
+<h2>4. Automatische Abhängigkeitsauflösung: der Pipeline-Graph</h2>
+<p>Eine der wichtigsten Eigenschaften deklarativer Pipelines: Die Reihenfolge, in der Datensätze im Code definiert werden, spielt keine Rolle. Databricks erkennt automatisch, welche Tabelle von welcher anderen abhängt (etwa weil <code>orders_silver</code> auf <code>orders_bronze</code> verweist), und verbindet diese Abhängigkeiten im sogenannten <strong>Pipeline-Graph</strong>. Das erspart manuelles Abhängigkeitsmanagement und macht den Datenfluss auf einen Blick sichtbar.</p>
+
+<figure class="img">
+<img src="assets/03/declarative_pipeline_graph.png">
+<figcaption>Der Pipeline-Graph verbindet Streaming Tables und Materialized Views automatisch anhand ihrer SQL-Abhängigkeiten.</figcaption>
+</figure>
+
+<div class="docbox">
+<strong>Ergänzt aus der offiziellen Databricks-Dokumentation:</strong> Databricks hat Delta Live Tables (DLT) auf dem Data + AI Summit 2025 offiziell in <strong>Lakeflow Declarative Pipelines</strong> umbenannt und als Teil der breiteren Lakeflow-Familie positioniert (zusammen mit Lakeflow Connect für Ingestion und Lakeflow Jobs für Orchestrierung, der neuen Bezeichnung für die früheren Databricks Workflows). Bestehender DLT-Code funktioniert ohne Migration unverändert weiter. Auf Python-Seite wurde zusätzlich der neue Dekorator <code>@materialized_view</code> eingeführt, ergänzend zum bisherigen <code>@table</code>-Dekorator für Streaming Tables.<br>
+Quelle: <a href="https://docs.databricks.com/aws/en/ldp/concepts/where-is-dlt">What happened to Delta Live Tables (DLT)? &ndash; Databricks-Dokumentation</a></div>
+
+<p class="footer-note">Databricks-Dokumentation (Deutsch) &mdash; erstellt aus internem Kursmaterial, ergänzt mit Inhalten der offiziellen Databricks-Dokumentation (docs.databricks.com).</p>
+</body></html>
